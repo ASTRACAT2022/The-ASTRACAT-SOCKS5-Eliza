@@ -1,17 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"html/template"
 	"io"
 	"log"
 	"net"
-	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -23,6 +22,9 @@ const (
 	domainNameAddress    = 0x03
 	ipv6Address          = 0x04
 	replySuccess         = 0x00
+
+	statsFilePath = "/var/lib/astra_socks_eliza/stats.json" // Путь к файлу статистики
+	usersFilePath = "/etc/astra_socks_eliza/users.json"     // Путь к файлу пользователей
 )
 
 // --- Структуры данных для пользователей и статистики (в памяти) ---
@@ -40,12 +42,13 @@ type UserTraffic struct {
 	DownloadBytes int64 `json:"downloadBytes"`
 }
 
-// TimeSeriesDataPoint представляет одну точку данных для графика
-type TimeSeriesDataPoint struct {
-	Timestamp         int64 `json:"timestamp"` // Unix timestamp
-	UploadBytes       int64 `json:"uploadBytes"`
-	DownloadBytes     int64 `json:"downloadBytes"`
-	ActiveConnections int32 `json:"activeConnections"`
+// GlobalStats представляет общую статистику
+type GlobalStats struct {
+	TotalUploadBytes   int64                     `json:"totalUploadBytes"`
+	TotalDownloadBytes int64                     `json:"totalDownloadBytes"`
+	ActiveConnections  int32                     `json:"activeConnections"`
+	UserStats          map[string]UserTraffic    `json:"userStats"` // Статистика по каждому пользователю
+	LastUpdateTime     time.Time                 `json:"lastUpdateTime"`
 }
 
 // Глобальные хранилища в памяти
@@ -58,24 +61,41 @@ var (
 
 	activeConnectionsCounter int32
 	activeConnectionsMutex   sync.Mutex
-
-	timeSeriesStats []TimeSeriesDataPoint
-	timeSeriesMutex sync.RWMutex
 )
 
-// Инициализация пользователей
+// init вызывается один раз при запуске программы
 func init() {
-	users["astranet"] = User{Username: "astranet", Password: "astranet", Enabled: true}
-	log.Println("Тестовый пользователь 'astranet:astranet' добавлен.")
-	timeSeriesStats = make([]TimeSeriesDataPoint, 0, 100)
+	// Попытка загрузить пользователей из файла
+	if err := loadUsersFromFile(); err != nil {
+		log.Printf("Внимание: Не удалось загрузить пользователей из файла %s: %v. Добавляем тестового пользователя.", usersFilePath, err)
+		// Добавляем тестового пользователя по умолчанию, если файл не найден или пуст
+		users["astranet"] = User{Username: "astranet", Password: "astranet", Enabled: true}
+	} else {
+		log.Printf("Пользователи загружены из %s.", usersFilePath)
+	}
+
+	log.Println("Порт SOCKS5: 7777")
+	log.Println("Статистика сохраняется в файл: " + statsFilePath)
 }
 
 // --- SOCKS5 Прокси-сервер ---
 
 func main() {
+	// Создаем необходимые директории для файлов статистики и пользователей, если их нет
+	err := os.MkdirAll(filepath.Dir(statsFilePath), 0755)
+	if err != nil {
+		log.Fatalf("Критическая ошибка: Не удалось создать директорию для файла статистики (%s): %v", filepath.Dir(statsFilePath), err)
+	}
+	err = os.MkdirAll(filepath.Dir(usersFilePath), 0755)
+	if err != nil {
+		log.Fatalf("Критическая ошибка: Не удалось создать директорию для файла пользователей (%s): %v", filepath.Dir(usersFilePath), err)
+	}
+
 	go startSocks5Server()
-	go aggregateStatsPeriodically(5 * time.Second)
-	startWebServer()
+	go saveStatsPeriodically(5 * time.Second) // Сохраняем статистику каждые 5 секунд
+
+	// Основная горутина просто ждет, чтобы программа не завершилась
+	select {}
 }
 
 func startSocks5Server() {
@@ -107,7 +127,7 @@ func handleConnection(conn net.Conn) {
 		activeConnectionsCounter--
 		activeConnectionsMutex.Unlock()
 	}()
-	log.Printf("Новое соединение от: %s", conn.RemoteAddr())
+	// log.Printf("Новое соединение от: %s", conn.RemoteAddr()) // Закомментировано для минимальных логов
 
 	username, err := socks5Handshake(conn)
 	if err != nil {
@@ -116,7 +136,7 @@ func handleConnection(conn net.Conn) {
 	}
 
 	if err := handleSocks5Request(conn, username); err != nil {
-		log.Printf("Ошибка SOCKS5 запроса для %s: %v", conn.RemoteAddr(), err)
+		log.Printf("Ошибка SOCKS5 запроса для %s (пользователь %s): %v", conn.RemoteAddr(), username, err)
 		return
 	}
 }
@@ -199,12 +219,12 @@ func authenticateUserPass(conn net.Conn) (string, error) {
 	usersMutex.RUnlock()
 
 	if !ok || !user.Enabled || user.Password != string(password) {
-		log.Printf("Аутентификация не удалась для пользователя: %s", username)
+		log.Printf("Аутентификация не удалась для пользователя: %s (с %s)", username, conn.RemoteAddr())
 		_, _ = conn.Write([]byte{0x01, 0x01})
 		return "", fmt.Errorf("неверные имя пользователя или пароль, или пользователь неактивен")
 	}
 
-	log.Printf("Аутентификация успешна для пользователя: %s", username)
+	log.Printf("Аутентификация успешна для пользователя: %s (с %s)", username, conn.RemoteAddr())
 	_, err = conn.Write([]byte{0x01, replySuccess})
 	if err != nil {
 		return "", fmt.Errorf("ошибка отправки ответа об успешной аутентификации: %w", err)
@@ -271,11 +291,11 @@ func handleSocks5Request(conn net.Conn, username string) error {
 	destPort = int(portBuf[0])<<8 | int(portBuf[1])
 
 	target := net.JoinHostPort(destAddr, strconv.Itoa(destPort))
-	log.Printf("Клиент %s (%s) запрашивает соединение с %s", conn.RemoteAddr(), username, target)
+	// log.Printf("Клиент %s (%s) запрашивает соединение с %s", conn.RemoteAddr(), username, target) // Закомментировано для минимальных логов
 
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
-		log.Printf("Ошибка Dial к %s: %v", target, err)
+		log.Printf("Ошибка Dial к %s (запрошено %s от %s): %v", target, username, conn.RemoteAddr(), err)
 		_, _ = conn.Write([]byte{socks5Version, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return fmt.Errorf("не удалось подключиться к целевому хосту: %w", err)
 	}
@@ -286,7 +306,7 @@ func handleSocks5Request(conn net.Conn, username string) error {
 		return fmt.Errorf("ошибка отправки ответа об успехе: %w", err)
 	}
 
-	log.Printf("Установлено прокси-соединение: %s (%s) <-> %s", conn.RemoteAddr(), username, target)
+	// log.Printf("Установлено прокси-соединение: %s (%s) <-> %s", conn.RemoteAddr(), username, target) // Закомментировано для минимальных логов
 	return proxyData(conn, targetConn, username)
 }
 
@@ -330,7 +350,7 @@ func proxyData(clientConn, targetConn net.Conn, username string) error {
 	trafficStats[username] = stats
 	trafficMutex.Unlock()
 
-	log.Printf("Пользователь %s: загружено %d байт (UPLOAD), скачано %d байт (DOWNLOAD) за сессию.", username, targetWriter.bytesWritten, clientWriter.bytesWritten)
+	// log.Printf("Пользователь %s: загружено %d байт (UPLOAD), скачано %d байт (DOWNLOAD) за сессию.", username, targetWriter.bytesWritten, clientWriter.bytesWritten) // Закомментировано
 
 	if err1 != nil && err1 != io.EOF {
 		return fmt.Errorf("ошибка копирования клиент -> цель: %w", err1)
@@ -341,775 +361,92 @@ func proxyData(clientConn, targetConn net.Conn, username string) error {
 	return nil
 }
 
-// aggregateStatsPeriodically собирает общую статистику и добавляет ее в временной ряд
-func aggregateStatsPeriodically(interval time.Duration) {
+// saveStatsPeriodically собирает общую статистику и сохраняет её в файл
+func saveStatsPeriodically(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
+		trafficMutex.RLock()
+		activeConnectionsMutex.Lock()
+
 		var totalUpload int64
 		var totalDownload int64
 
-		trafficMutex.RLock() // Читаем текущую статистику
-		for _, stats := range trafficStats {
+		currentUserStats := make(map[string]UserTraffic)
+		for username, stats := range trafficStats {
 			totalUpload += stats.UploadBytes
 			totalDownload += stats.DownloadBytes
+			currentUserStats[username] = stats // Копируем статистику каждого пользователя
 		}
+
+		currentActiveConnections := activeConnectionsCounter
+
+		activeConnectionsMutex.Unlock()
 		trafficMutex.RUnlock()
 
-		activeConnectionsMutex.Lock() // Читаем текущее количество активных соединений
-		currentActiveConnections := activeConnectionsCounter
-		activeConnectionsMutex.Unlock()
-
-		dataPoint := TimeSeriesDataPoint{
-			Timestamp:         time.Now().Unix(),
-			UploadBytes:       totalUpload,
-			DownloadBytes:     totalDownload,
-			ActiveConnections: currentActiveConnections,
+		globalStats := GlobalStats{
+			TotalUploadBytes:   totalUpload,
+			TotalDownloadBytes: totalDownload,
+			ActiveConnections:  currentActiveConnections,
+			UserStats:          currentUserStats,
+			LastUpdateTime:     time.Now(),
 		}
 
-		timeSeriesMutex.Lock()
-		timeSeriesStats = append(timeSeriesStats, dataPoint)
-		if len(timeSeriesStats) > 100 { // Например, храним последние 100 точек (100 * 5 секунд = 500 секунд = ~8 минут)
-			timeSeriesStats = timeSeriesStats[1:]
+		// Сохраняем статистику в файл
+		file, err := os.OpenFile(statsFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			log.Printf("Ошибка при открытии/создании файла статистики %s: %v", statsFilePath, err)
+			continue
 		}
-		timeSeriesMutex.Unlock()
-		log.Printf("Агрегирована статистика: U:%d, D:%d, ActiveConn:%d", totalUpload, totalDownload, currentActiveConnections)
+		encoder := json.NewEncoder(file)
+		encoder.SetIndent("", "  ") // Для красивого форматирования JSON
+		if err := encoder.Encode(globalStats); err != nil {
+			log.Printf("Ошибка при записи статистики в файл %s: %v", statsFilePath, err)
+		}
+		file.Close()
+		// log.Printf("Статистика сохранена в %s", statsFilePath) // Закомментировано для минимальных логов
 	}
 }
 
-// --- Веб-панель (Бэкенд и Фронтенд) ---
-
-func startWebServer() {
-	r := gin.Default()
-
-	r.SetHTMLTemplate(parseTemplate())
-	r.GET("/", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "index.html", gin.H{})
-	})
-
-	// API-эндпоинты
-	r.GET("/api/users", getUsers)
-	r.POST("/api/users", createUser)
-	r.PUT("/api/users/:username", updateUser)
-	r.DELETE("/api/users/:username", deleteUser)
-	r.GET("/api/stats", getTrafficStats)
-	r.GET("/api/total_stats", getTotalTrafficStats)
-	r.GET("/api/time_series_stats", getTimeSeriesStats)
-
-	log.Println("Веб-панель The-ASTRACAT-SOCKS-Eliza запущена на http://localhost:3434")
-	if err := r.Run(":3434"); err != nil { // Изменен порт на 3434
-		log.Fatalf("Ошибка при запуске веб-сервера: %v", err)
-	}
-}
-
-// Функции API
-func getUsers(c *gin.Context) {
-	usersMutex.RLock()
-	defer usersMutex.RUnlock()
-
-	userList := make([]User, 0, len(users))
-	for _, user := range users {
-		userList = append(userList, user)
-	}
-	c.JSON(http.StatusOK, userList)
-}
-
-type UserCreationRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Enabled  bool   `json:"enabled"`
-}
-
-func createUser(c *gin.Context) {
-	var req UserCreationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	usersMutex.Lock()
-	defer usersMutex.Unlock()
-
-	if _, ok := users[req.Username]; ok {
-		c.JSON(http.StatusConflict, gin.H{"error": "Пользователь с таким именем уже существует"})
-		return
-	}
-
-	users[req.Username] = User{Username: req.Username, Password: req.Password, Enabled: req.Enabled}
-	c.JSON(http.StatusCreated, gin.H{"message": "Пользователь успешно создан", "user": users[req.Username]})
-}
-
-func updateUser(c *gin.Context) {
-	username := c.Param("username")
-	var req UserCreationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	usersMutex.Lock()
-	defer usersMutex.Unlock()
-
-	user, ok := users[username]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
-		return
-	}
-
-	user.Password = req.Password
-	user.Enabled = req.Enabled
-	users[username] = user
-
-	c.JSON(http.StatusOK, gin.H{"message": "Пользователь успешно обновлен", "user": users[username]})
-}
-
-func deleteUser(c *gin.Context) {
-	username := c.Param("username")
-
-	usersMutex.Lock()
-	defer usersMutex.Unlock()
-
-	if _, ok := users[username]; !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
-		return
-	}
-
-	delete(users, username)
-	delete(trafficStats, username) // Очищаем статистику для удаленного пользователя
-
-	c.JSON(http.StatusOK, gin.H{"message": "Пользователь успешно удален"})
-}
-
-func getTrafficStats(c *gin.Context) {
-	trafficMutex.RLock()
-	defer trafficMutex.RUnlock()
-
-	statsList := make([]map[string]interface{}, 0, len(trafficStats))
-	for username, stats := range trafficStats {
-		statsList = append(statsList, map[string]interface{}{
-			"username":      username,
-			"uploadBytes":   stats.UploadBytes,
-			"downloadBytes": stats.DownloadBytes,
-		})
-	}
-	c.JSON(http.StatusOK, statsList)
-}
-
-func getTotalTrafficStats(c *gin.Context) {
-	trafficMutex.RLock()
-	defer trafficMutex.RUnlock()
-
-	var totalUpload int64
-	var totalDownload int64
-
-	for _, stats := range trafficStats {
-		totalUpload += stats.UploadBytes
-		totalDownload += stats.DownloadBytes
-	}
-
-	activeConnectionsMutex.Lock()
-	currentActiveConnections := activeConnectionsCounter
-	activeConnectionsMutex.Unlock()
-
-	c.JSON(http.StatusOK, gin.H{
-		"totalUploadBytes":   totalUpload,
-		"totalDownloadBytes": totalDownload,
-		"activeConnections":  currentActiveConnections,
-	})
-}
-
-func getTimeSeriesStats(c *gin.Context) {
-	timeSeriesMutex.RLock()
-	defer timeSeriesMutex.RUnlock()
-	c.JSON(http.StatusOK, timeSeriesStats)
-}
-
-// parseTemplate парсит HTML-шаблон для фронтенда
-func parseTemplate() *template.Template {
-	// Использование "сырых" строковых литералов (`...`) позволяет вставлять многострочный текст без необходимости экранирования
-	// кавычек или новых строк. Это идеально подходит для встроенного HTML.
-	htmlContent := `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The-ASTRACAT-SOCKS-Eliza Admin Panel</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        :root {
-            --background: #09090b;
-            --foreground: #fafafa;
-            --card: #18181b;
-            --card-foreground: #fafafa;
-            --popover: #09090b;
-            --popover-foreground: #fafafa;
-            --primary: #a855f7; /* Purple */
-            --primary-foreground: #fafafa;
-            --secondary: #27272a;
-            --secondary-foreground: #fafafa;
-            --muted: #27272a;
-            --muted-foreground: #a1a1aa;
-            --accent: #27272a;
-            --accent-foreground: #fafafa;
-            --destructive: #ef4444;
-            --destructive-foreground: #fafafa;
-            --border: #27272a;
-            --input: #27272a;
-            --ring: #a855f7;
-            --radius: 0.5rem;
-        }
-
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: var(--background);
-            color: var(--foreground);
-            line-height: 1.6;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: auto;
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 20px;
-        }
-
-        @media (min-width: 768px) {
-            .container {
-                grid-template-columns: 2fr 1fr;
-            }
-            .full-width-card {
-                 grid-column: 1 / -1;
-            }
-        }
-
-        .card {
-            background-color: var(--card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        h1, h2, h3 {
-            color: var(--primary);
-            margin-top: 0;
-            margin-bottom: 15px;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-            color: var(--foreground);
-        }
-
-        th, td {
-            border: 1px solid var(--border);
-            padding: 10px;
-            text-align: left;
-        }
-
-        th {
-            background-color: var(--secondary);
-            font-weight: bold;
-        }
-
-        .form-group {
-            margin-bottom: 15px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
-            color: var(--muted-foreground);
-        }
-
-        .form-group input[type="text"],
-        .form-group input[type="password"] {
-            width: calc(100% - 22px);
-            padding: 10px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background-color: var(--input);
-            color: var(--foreground);
-        }
-
-        .form-group input[type="checkbox"] {
-            margin-right: 8px;
-            transform: scale(1.2);
-        }
-
-        .btn {
-            background-color: var(--primary);
-            color: var(--primary-foreground);
-            padding: 10px 18px;
-            border: none;
-            border-radius: var(--radius);
-            cursor: pointer;
-            font-size: 1rem;
-            margin-right: 10px;
-            transition: background-color 0.2s ease;
-        }
-        .btn:hover {
-            background-color: #8c42db; /* Slightly darker primary color */
-        }
-
-        .btn-secondary {
-            background-color: var(--secondary);
-            color: var(--secondary-foreground);
-        }
-        .btn-secondary:hover {
-            background-color: #1e1e20; /* Slightly darker secondary color */
-        }
-
-        .btn-danger {
-            background-color: var(--destructive);
-            color: var(--destructive-foreground);
-        }
-        .btn-danger:hover {
-            background-color: #c03939; /* Slightly darker destructive color */
-        }
-
-        .message {
-            margin-top: 15px;
-            padding: 10px;
-            border-radius: var(--radius);
-            font-weight: bold;
-        }
-
-        .message.success {
-            background-color: #1e40af;
-            color: #dbeafe;
-            border: 1px solid #93c5fd;
-        }
-        .message.error {
-            background-color: #7f1d1d;
-            color: #fee2e2;
-            border: 1px solid #fca5a5;
-        }
-
-        canvas {
-            background-color: var(--popover);
-            border-radius: var(--radius);
-            padding: 10px;
-        }
-
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .metric-card {
-            background-color: var(--card);
-            padding: 15px;
-            border-radius: var(--radius);
-            border: 1px solid var(--border);
-            text-align: center;
-        }
-        .metric-card .value {
-            font-size: 2em;
-            font-weight: bold;
-            color: var(--primary);
-            margin-top: 5px;
-        }
-        .metric-card .label {
-            color: var(--muted-foreground);
-            font-size: 0.9em;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="card full-width-card">
-            <h1>The-ASTRACAT-SOCKS-Eliza Admin Panel</h1>
-            <div class="message" id="message" style="display:none;"></div>
-
-            <div class="grid-3">
-                <div class="metric-card">
-                    <div class="label">Total Upload</div>
-                    <div class="value" id="totalUpload">0 KB</div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">Total Download</div>
-                    <div class="value" id="totalDownload">0 KB</div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">Active Connections</div>
-                    <div class="value" id="activeConnections">0</div>
-                </div>
-            </div>
-
-            <h2>Traffic & Connections Over Time</h2>
-            <div class="card" style="margin-bottom: 20px;">
-                <canvas id="trafficChart"></canvas>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>Manage Users</h2>
-            <form id="userForm">
-                <div class="form-group">
-                    <label for="username">Username:</label>
-                    <input type="text" id="username" name="username" required>
-                </div>
-                <div class="form-group">
-                    <label for="password">Password:</label>
-                    <input type="password" id="password" name="password" required>
-                </div>
-                <div class="form-group">
-                    <input type="checkbox" id="enabled" name="enabled" checked>
-                    <label for="enabled">Enabled</label>
-                </div>
-                <button type="submit" class="btn">Add User</button>
-                <button type="button" class="btn btn-secondary" id="updateUserBtn" style="display:none;">Update User</button>
-                <button type="button" class="btn-danger" id="cancelEditBtn" style="display:none;">Cancel</button>
-            </form>
-        </div>
-
-        <div class="card">
-            <h3>User List</h3>
-            <table id="userTable">
-                <thead>
-                    <tr>
-                        <th>Username</th>
-                        <th>Password (raw)</th>
-                        <th>Enabled</th>
-                        <th>Upload (KB)</th>
-                        <th>Download (KB)</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        const API_BASE_URL = '/api';
-        const messageDiv = document.getElementById('message');
-        const userForm = document.getElementById('userForm');
-        const usernameInput = document.getElementById('username');
-        const passwordInput = document.getElementById('password');
-        const enabledInput = document.getElementById('enabled');
-        const addUserBtn = userForm.querySelector('button[type="submit"]');
-        const updateUserBtn = document.getElementById('updateUserBtn');
-        const cancelEditBtn = document.getElementById('cancelEditBtn');
-        const userTableBody = document.querySelector('#userTable tbody');
-        
-        const totalUploadSpan = document.getElementById('totalUpload');
-        const totalDownloadSpan = document.getElementById('totalDownload');
-        const activeConnectionsSpan = document.getElementById('activeConnections');
-
-        let editingUsername = null;
-        let trafficChart;
-
-        document.addEventListener('DOMContentLoaded', () => {
-            const ctx = document.getElementById('trafficChart').getContext('2d');
-            trafficChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [
-                        {
-                            label: 'Upload (KB)',
-                            data: [],
-                            borderColor: 'rgb(168, 85, 247)',
-                            backgroundColor: 'rgba(168, 85, 247, 0.2)',
-                            fill: true,
-                            tension: 0.1
-                        },
-                        {
-                            label: 'Download (KB)',
-                            data: [],
-                            borderColor: 'rgb(34, 197, 94)',
-                            backgroundColor: 'rgba(34, 197, 94, 0.2)',
-                            fill: true,
-                            tension: 0.1
-                        },
-                        {
-                            label: 'Active Connections',
-                            data: [],
-                            borderColor: 'rgb(59, 130, 246)',
-                            backgroundColor: 'rgba(59, 130, 246, 0.2)',
-                            fill: false,
-                            tension: 0.1,
-                            yAxisID: 'y1'
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'second',
-                                displayFormats: {
-                                    second: 'HH:mm:ss'
-                                }
-                            },
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: 'var(--muted-foreground)'
-                            },
-                            ticks: {
-                                color: 'var(--muted-foreground)'
-                            },
-                            grid: {
-                                color: 'var(--border)'
-                            }
-                        },
-                        y: {
-                            type: 'linear',
-                            display: true,
-                            position: 'left',
-                            title: {
-                                display: true,
-                                text: 'Traffic (KB)',
-                                color: 'var(--muted-foreground)'
-                            },
-                            ticks: {
-                                color: 'var(--muted-foreground)'
-                            },
-                            grid: {
-                                color: 'var(--border)'
-                            }
-                        },
-                        y1: {
-                            type: 'linear',
-                            display: true,
-                            position: 'right',
-                            title: {
-                                display: true,
-                                text: 'Connections',
-                                color: 'var(--muted-foreground)'
-                            },
-                            grid: {
-                                drawOnChartArea: false,
-                                color: 'var(--border)'
-                            },
-                            ticks: {
-                                color: 'var(--muted-foreground)',
-                                callback: function(value, index, values) {
-                                    if (Number.isInteger(value)) {
-                                        return value;
-                                    }
-                                    return null;
-                                }
-                            }
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            labels: {
-                                color: 'var(--muted-foreground)'
-                            }
-                        }
-                    }
-                }
-            });
-        });
-
-
-        function showMessage(msg, type) {
-            messageDiv.textContent = msg;
-            messageDiv.className = `message ${type}`;
-            messageDiv.style.display = 'block';
-            setTimeout(() => {
-                messageDiv.style.display = 'none';
-            }, 3000);
-        }
-
-        async function fetchAllData() {
-            try {
-                const [usersRes, statsRes, totalStatsRes, timeSeriesRes] = await Promise.all([
-                    fetch(`${API_BASE_URL}/users`),
-                    fetch(`${API_BASE_URL}/stats`),
-                    fetch(`${API_BASE_URL}/total_stats`),
-                    fetch(`${API_BASE_URL}/time_series_stats`)
-                ]);
-
-                if (!usersRes.ok) throw new Error(`HTTP error! status: ${usersRes.status}`);
-                if (!statsRes.ok) throw new Error(`HTTP error! status: ${statsRes.status}`);
-                if (!totalStatsRes.ok) throw new Error(`HTTP error! status: ${totalStatsRes.status}`);
-                if (!timeSeriesRes.ok) throw new Error(`HTTP error! status: ${timeSeriesRes.status}`);
-
-                const users = await usersRes.json();
-                const stats = await statsRes.json();
-                const totalStats = await totalStatsRes.json();
-                const timeSeriesData = await timeSeriesRes.json();
-
-                renderUserTable(users, stats);
-                renderTotalStats(totalStats);
-                updateChart(timeSeriesData);
-            } catch (error) {
-                console.error('Error fetching data:', error);
-                showMessage(`Error loading data: ${error.message}`, 'error');
-            }
-        }
-
-        function renderUserTable(users, stats) {
-            userTableBody.innerHTML = '';
-            const statsMap = new Map(stats.map(s => [s.username, s]));
-
-            if (users.length === 0) {
-                userTableBody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No users found.</td></tr>';
-                return;
-            }
-
-            users.forEach(user => {
-                const row = userTableBody.insertRow();
-                const userStats = statsMap.get(user.username) || { uploadBytes: 0, downloadBytes: 0 };
-
-                row.insertCell().textContent = user.username;
-                row.insertCell().textContent = user.password;
-                row.insertCell().textContent = user.enabled ? 'Yes' : 'No';
-                row.insertCell().textContent = (userStats.uploadBytes / 1024).toFixed(2);
-                row.insertCell().textContent = (userStats.downloadBytes / 1024).toFixed(2);
-
-                const actionsCell = row.insertCell();
-                const editBtn = document.createElement('button');
-                editBtn.textContent = 'Edit';
-                editBtn.className = 'btn btn-secondary';
-                editBtn.onclick = () => editUser(user);
-                actionsCell.appendChild(editBtn);
-
-                const deleteBtn = document.createElement('button');
-                deleteBtn.textContent = 'Delete';
-                deleteBtn.className = 'btn btn-danger';
-                deleteBtn.onclick = () => deleteUser(user.username);
-                actionsCell.appendChild(deleteBtn);
-            });
-        }
-
-        function renderTotalStats(totalStats) {
-            totalUploadSpan.textContent = (totalStats.totalUploadBytes / 1024).toFixed(2) + ' KB';
-            totalDownloadSpan.textContent = (totalStats.totalDownloadBytes / 1024).toFixed(2) + ' KB';
-            activeConnectionsSpan.textContent = totalStats.activeConnections;
-        }
-
-        function updateChart(timeSeriesData) {
-            const labels = timeSeriesData.map(d => new Date(d.timestamp * 1000));
-            const uploadData = timeSeriesData.map(d => (d.uploadBytes / 1024).toFixed(2));
-            const downloadData = timeSeriesData.map(d => (d.downloadBytes / 1024).toFixed(2));
-            const activeConnData = timeSeriesData.map(d => d.activeConnections);
-
-            trafficChart.data.labels = labels;
-            trafficChart.data.datasets[0].data = uploadData;
-            trafficChart.data.datasets[1].data = downloadData;
-            trafficChart.data.datasets[2].data = activeConnData;
-            trafficChart.update();
-        }
-
-        function editUser(user) {
-            editingUsername = user.username;
-            usernameInput.value = user.username;
-            passwordInput.value = user.password;
-            enabledInput.checked = user.enabled;
-
-            usernameInput.disabled = true;
-            addUserBtn.style.display = 'none';
-            updateUserBtn.style.display = 'inline-block';
-            cancelEditBtn.style.display = 'inline-block';
-        }
-
-        function cancelEdit() {
-            editingUsername = null;
-            userForm.reset();
-            usernameInput.disabled = false;
-            addUserBtn.style.display = 'inline-block';
-            updateUserBtn.style.display = 'none';
-            cancelEditBtn.style.display = 'none';
-        }
-
-        async function submitUserForm(event) {
-            event.preventDefault();
-
-            const userData = {
-                username: usernameInput.value,
-                password: passwordInput.value,
-                enabled: enabledInput.checked
-            };
-
-            let url = `${API_BASE_URL}/users`;
-            let method = 'POST';
-
-            if (editingUsername) {
-                url = `${API_BASE_URL}/users/${editingUsername}`;
-                method = 'PUT';
-            }
-
-            try {
-                const response = await fetch(url, {
-                    method: method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(userData)
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    showMessage(result.message, 'success');
-                    userForm.reset();
-                    cancelEdit();
-                    fetchAllData();
-                } else {
-                    showMessage(`Error: ${result.error || response.statusText}`, 'error');
-                }
-            } catch (error) {
-                console.error('Error submitting form:', error);
-                showMessage(`Network error: ${error.message}`, 'error');
-            }
-        }
-
-        async function deleteUser(username) {
-            if (!confirm(`Are you sure you want to delete user ${username}? This will also clear their traffic stats.`)) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`${API_BASE_URL}/users/${username}`, {
-                    method: 'DELETE'
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    showMessage(result.message, 'success');
-                    fetchAllData();
-                } else {
-                    showMessage(`Error: ${result.error || response.statusText}`, 'error');
-                }
-            } catch (error) {
-                console.error('Error deleting user:', error);
-                showMessage(`Network error: ${error.message}`, 'error');
-            }
-        }
-
-        userForm.addEventListener('submit', submitUserForm);
-        updateUserBtn.addEventListener('click', submitUserForm);
-        cancelEditBtn.addEventListener('click', cancelEdit);
-
-        fetchAllData();
-        setInterval(fetchAllData, 5000);
-    </script>
-</body>
-</html>
-`
-	tmpl := template.New("index.html")
-	tmpl, err := tmpl.Parse(htmlContent)
+// loadUsersFromFile загружает пользователей из JSON-файла
+func loadUsersFromFile() error {
+	file, err := os.Open(usersFilePath)
 	if err != nil {
-		log.Fatalf("Ошибка при парсинге HTML шаблона: %v", err)
+		if os.IsNotExist(err) {
+			// Если файл не существует, создаем его с тестовыми данными
+			log.Printf("Инфо: Файл пользователей %s не найден. Создаю новый файл с пользователем 'astranet:astranet'.", usersFilePath)
+			defaultUsers := map[string]User{
+				"astranet": {Username: "astranet", Password: "astranet", Enabled: true},
+			}
+			data, err := json.MarshalIndent(defaultUsers, "", "  ")
+			if err != nil {
+				return fmt.Errorf("ошибка кодирования JSON для пользователей по умолчанию: %w", err)
+			}
+			// Убедимся, что директория существует перед записью файла
+			if err := os.MkdirAll(filepath.Dir(usersFilePath), 0755); err != nil {
+				return fmt.Errorf("не удалось создать директорию для файла пользователей %s: %w", filepath.Dir(usersFilePath), err)
+			}
+			if err := os.WriteFile(usersFilePath, data, 0644); err != nil {
+				return fmt.Errorf("ошибка записи файла пользователей по умолчанию: %w", err)
+			}
+			usersMutex.Lock()
+			users = defaultUsers
+			usersMutex.Unlock()
+			return nil
+		}
+		return fmt.Errorf("ошибка открытия файла пользователей %s: %w", usersFilePath, err)
 	}
-	return tmpl
+	defer file.Close()
+
+	var tempUsers map[string]User
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&tempUsers); err != nil {
+		return fmt.Errorf("ошибка декодирования JSON из файла пользователей %s: %w", usersFilePath, err)
+	}
+
+	usersMutex.Lock()
+	users = tempUsers
+	usersMutex.Unlock()
+	return nil
 }
