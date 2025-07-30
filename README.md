@@ -1,18 +1,4 @@
-Превосходно\! Это замечательно, что всё заработало как надо.
-
-Теперь давайте создадим файл `README.md` для вашего проекта. Этот файл является визитной карточкой проекта и содержит основную информацию о нём.
-
------
-
-Создайте файл `README.md` в корневой директории вашего проекта:
-
-```bash
-cd /root/The-ASTRACAT-SOKS-Eliza
-nano README.md
-```
-
-Затем скопируйте и вставьте следующее содержимое:
-
+Creater * **Telegram-канал:** [ASTRACAT UI](https://t.me/astracatui)  ([@astracatui](https://t.me/astracatui))
 ````markdown
 # The-ASTRACAT-SOCKS-Eliza
 
