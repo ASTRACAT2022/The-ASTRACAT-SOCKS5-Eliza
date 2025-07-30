@@ -1,27 +1,48 @@
 package main
 
 import (
+	"context" // Добавьте импорт context
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"strconv"
+	"time" // Добавьте импорт time
+
+	"github.com/go-redis/redis/v8" // Импорт go-redis
 )
 
 const (
-	socks5Version        = 0x05 // Версия SOCKS5
-	noAuthRequired       = 0x00 // Метод аутентификации: без аутентификации
-	usernamePasswordAuth = 0x02 // Метод аутентификации: логин/пароль
-	connectCommand       = 0x01 // Команда CONNECT
-	ipv4Address          = 0x01 // Тип адреса: IPv4
-	domainNameAddress    = 0x03 // Тип адреса: Доменное имя
-	ipv6Address          = 0x04 // Тип адреса: IPv6
-	replySuccess         = 0x00 // Ответ: Успешно
+	socks5Version        = 0x05
+	noAuthRequired       = 0x00
+	usernamePasswordAuth = 0x02
+	connectCommand       = 0x01
+	ipv4Address          = 0x01
+	domainNameAddress    = 0x03
+	ipv6Address          = 0x04
+	replySuccess         = 0x00
 )
 
-// Main function to start the SOCKS5 server
+// Глобальный клиент Redis
+var redisClient *redis.Client
+// Контекст для Redis операций
+var ctx = context.Background()
+
 func main() {
-	// 1. Listen for incoming connections on port 7777
+	// Инициализация Redis клиента
+	redisClient = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379", // Адрес вашего Redis сервера
+		Password: "",           // Пароль Redis, если есть
+		DB: 0,                  // Номер базы данных
+	})
+
+	// Проверяем соединение с Redis
+	_, err := redisClient.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("Не удалось подключиться к Redis: %v", err)
+	}
+	log.Println("Успешно подключено к Redis!")
+
 	listener, err := net.Listen("tcp", "0.0.0.0:7777")
 	if err != nil {
 		log.Fatalf("Ошибка при запуске SOCKS5 сервера: %v", err)
@@ -30,57 +51,50 @@ func main() {
 	log.Println("SOCKS5 сервер запущен на 0.0.0.0:7777 с аутентификацией логин/пароль")
 
 	for {
-		// Accept a new connection
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Printf("Ошибка при приёме соединения: %v", err)
 			continue
 		}
-		// Handle the connection in a new goroutine
 		go handleConnection(conn)
 	}
 }
 
-// handleConnection handles a single client connection
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	log.Printf("Новое соединение от: %s", conn.RemoteAddr())
 
-	// Step 1: SOCKS5 Handshake
-	if err := socks5Handshake(conn); err != nil {
+	username, err := socks5Handshake(conn)
+	if err != nil {
 		log.Printf("Ошибка SOCKS5 рукопожатия для %s: %v", conn.RemoteAddr(), err)
 		return
 	}
 
-	// Step 2: Handle SOCKS5 Request (CONNECT)
-	if err := handleSocks5Request(conn); err != nil {
+	if err := handleSocks5Request(conn, username); err != nil {
 		log.Printf("Ошибка SOCKS5 запроса для %s: %v", conn.RemoteAddr(), err)
 		return
 	}
 }
 
-// socks5Handshake performs the SOCKS5 handshake and authentication
-func socks5Handshake(conn net.Conn) error {
-	// Read SOCKS version and number of methods
+// socks5Handshake теперь возвращает имя пользователя при успешной аутентификации
+func socks5Handshake(conn net.Conn) (string, error) {
 	buf := make([]byte, 2)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения приветствия SOCKS5: %w", err)
+		return "", fmt.Errorf("ошибка чтения приветствия SOCKS5: %w", err)
 	}
 
 	if buf[0] != socks5Version {
-		return fmt.Errorf("неподдерживаемая версия SOCKS: %d", buf[0])
+		return "", fmt.Errorf("неподдерживаемая версия SOCKS: %d", buf[0])
 	}
 
-	// Read supported authentication methods
 	numMethods := int(buf[1])
 	methods := make([]byte, numMethods)
 	_, err = io.ReadFull(conn, methods)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения методов аутентификации: %w", err)
+		return "", fmt.Errorf("ошибка чтения методов аутентификации: %w", err)
 	}
 
-	// Check if Username/Password authentication (0x02) is supported
 	foundUserPassAuth := false
 	for _, method := range methods {
 		if method == usernamePasswordAuth {
@@ -90,78 +104,70 @@ func socks5Handshake(conn net.Conn) error {
 	}
 
 	if !foundUserPassAuth {
-		// If 0x02 is not supported, reply with "No acceptable methods"
 		_, _ = conn.Write([]byte{socks5Version, 0xFF})
-		return fmt.Errorf("нет поддерживаемых методов аутентификации (требуется 0x02)")
+		return "", fmt.Errorf("нет поддерживаемых методов аутентификации (требуется 0x02)")
 	}
 
-	// Reply to client: SOCKS5, Username/Password authentication (0x02)
 	_, err = conn.Write([]byte{socks5Version, usernamePasswordAuth})
 	if err != nil {
-		return fmt.Errorf("ошибка отправки подтверждения метода аутентификации: %w", err)
+		return "", fmt.Errorf("ошибка отправки подтверждения метода аутентификации: %w", err)
 	}
 
-	// Perform Username/Password authentication
-	return authenticateUserPass(conn)
+	// Передаем результат аутентификации
+	username, err := authenticateUserPass(conn)
+	if err != nil {
+		return "", err
+	}
+	return username, nil
 }
 
-// authenticateUserPass performs Username/Password authentication (RFC 1929)
-func authenticateUserPass(conn net.Conn) error {
-	// Read version byte and username length byte
+// authenticateUserPass теперь возвращает имя пользователя
+func authenticateUserPass(conn net.Conn) (string, error) {
 	buf := make([]byte, 2)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения заголовка аутентификации: %w", err)
+		return "", fmt.Errorf("ошибка чтения заголовка аутентификации: %w", err)
 	}
 
-	// Check authentication protocol version (must be 0x01)
 	if buf[0] != 0x01 {
-		return fmt.Errorf("неподдерживаемая версия протокола аутентификации: %d", buf[0])
+		return "", fmt.Errorf("неподдерживаемая версия протокола аутентификации: %d", buf[0])
 	}
 
-	// Read username
 	usernameLen := int(buf[1])
-	username := make([]byte, usernameLen)
-	_, err = io.ReadFull(conn, username)
+	usernameBuf := make([]byte, usernameLen)
+	_, err = io.ReadFull(conn, usernameBuf)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения имени пользователя: %w", err)
+		return "", fmt.Errorf("ошибка чтения имени пользователя: %w", err)
 	}
+	username := string(usernameBuf) // Сохраняем имя пользователя
 
-	// Read password length byte and password
-	_, err = io.ReadFull(conn, buf[0:1]) // Read 1 byte for password length
+	_, err = io.ReadFull(conn, buf[0:1])
 	if err != nil {
-		return fmt.Errorf("ошибка чтения длины пароля: %w", err)
+		return "", fmt.Errorf("ошибка чтения длины пароля: %w", err)
 	}
 	passwordLen := int(buf[0])
 	password := make([]byte, passwordLen)
 	_, err = io.ReadFull(conn, password)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения пароля: %w", err)
+		return "", fmt.Errorf("ошибка чтения пароля: %w", err)
 	}
 
-	// --- Hardcoded authentication check (replace with DB lookup later) ---
-	if string(username) == "astranet" && string(password) == "astranet" {
-		// Authentication successful
+	if username == "astranet" && string(password) == "astranet" {
 		log.Printf("Аутентификация успешна для пользователя: %s", username)
-		_, err = conn.Write([]byte{0x01, replySuccess}) // Succeeded (0x00)
+		_, err = conn.Write([]byte{0x01, replySuccess})
 		if err != nil {
-			return fmt.Errorf("ошибка отправки ответа об успешной аутентификации: %w", err)
+			return "", fmt.Errorf("ошибка отправки ответа об успешной аутентификации: %w", err)
 		}
-		return nil
+		return username, nil // Возвращаем имя пользователя
 	} else {
-		// Authentication failed
 		log.Printf("Аутентификация не удалась для пользователя: %s", username)
-		_, err = conn.Write([]byte{0x01, 0x01}) // General failure (0x01)
-		if err != nil {
-			return fmt.Errorf("ошибка отправки ответа о неудачной аутентификации: %w", err)
-		}
-		return fmt.Errorf("неверные имя пользователя или пароль")
+		_, _ = conn.Write([]byte{0x01, 0x01})
+		return "", fmt.Errorf("неверные имя пользователя или пароль")
 	}
 }
 
-// handleSocks5Request handles the client's request (CONNECT command)
-func handleSocks5Request(conn net.Conn) error {
-	// Read the first 4 bytes of the request: [VER | CMD | RSV | ATYP]
+// handleSocks5Request теперь принимает имя пользователя
+func handleSocks5Request(conn net.Conn, username string) error {
 	buf := make([]byte, 4)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
@@ -173,7 +179,6 @@ func handleSocks5Request(conn net.Conn) error {
 	}
 
 	if buf[1] != connectCommand {
-		// Reply with "Command not supported" (0x07)
 		_, _ = conn.Write([]byte{socks5Version, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return fmt.Errorf("неподдерживаемая команда: %d", buf[1])
 	}
@@ -209,7 +214,6 @@ func handleSocks5Request(conn net.Conn) error {
 		}
 		destAddr = net.IP(ipv6).String()
 	default:
-		// Reply with "Address type not supported" (0x08)
 		_, _ = conn.Write([]byte{socks5Version, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return fmt.Errorf("неподдерживаемый тип адреса: %d", buf[3])
 	}
@@ -222,43 +226,72 @@ func handleSocks5Request(conn net.Conn) error {
 	destPort = int(portBuf[0])<<8 | int(portBuf[1])
 
 	target := net.JoinHostPort(destAddr, strconv.Itoa(destPort))
-	log.Printf("Клиент %s запрашивает соединение с %s", conn.RemoteAddr(), target)
+	log.Printf("Клиент %s (%s) запрашивает соединение с %s", conn.RemoteAddr(), username, target)
 
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
 		log.Printf("Ошибка Dial к %s: %v", target, err)
-		// Reply with "Connection refused/host unreachable" (0x05)
 		_, _ = conn.Write([]byte{socks5Version, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return fmt.Errorf("не удалось подключиться к целевому хосту: %w", err)
 	}
 	defer targetConn.Close()
 
-	// Reply to client with success
 	_, err = conn.Write([]byte{socks5Version, replySuccess, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 	if err != nil {
 		return fmt.Errorf("ошибка отправки ответа об успехе: %w", err)
 	}
 
-	log.Printf("Установлено прокси-соединение: %s <-> %s", conn.RemoteAddr(), target)
-	return proxyData(conn, targetConn)
+	log.Printf("Установлено прокси-соединение: %s (%s) <-> %s", conn.RemoteAddr(), username, target)
+	// Передаем имя пользователя в proxyData
+	return proxyData(conn, targetConn, username)
 }
 
-// proxyData redirects data between two connections
-func proxyData(clientConn, targetConn net.Conn) error {
+// customWriter обертывает net.Conn и считает переданные байты
+type customWriter struct {
+	io.Writer
+	bytesWritten int64
+}
+
+func (cw *customWriter) Write(p []byte) (n int, err error) {
+	n, err = cw.Writer.Write(p)
+	cw.bytesWritten += int64(n)
+	return
+}
+
+// proxyData теперь собирает статистику и отправляет её в Redis
+func proxyData(clientConn, targetConn net.Conn, username string) error {
 	done := make(chan error, 2)
 
+	// Создаем обертки для подсчета трафика
+	clientWriter := &customWriter{Writer: clientConn}
+	targetWriter := &customWriter{Writer: targetConn}
+
+	// Копируем данные от клиента к целевому серверу и считаем трафик
 	go func() {
-		_, err := io.Copy(targetConn, clientConn)
+		_, err := io.Copy(targetWriter, clientConn) // clientConn (Reader) -> targetWriter (Writer)
 		done <- err
 	}()
 
+	// Копируем данные от целевого сервера к клиенту и считаем трафик
 	go func() {
-		_, err := io.Copy(clientConn, targetConn)
+		_, err := io.Copy(clientWriter, targetConn) // targetConn (Reader) -> clientWriter (Writer)
 		done <- err
 	}()
 
 	err1 := <-done
 	err2 := <-done
+
+	// После завершения соединения, отправляем статистику в Redis
+	// Ключи Redis: `user:astranet:download_bytes`, `user:astranet:upload_bytes`
+	// Используем HINCRBY для атомарного увеличения счетчиков
+	if targetWriter.bytesWritten > 0 { // Байты, отправленные от клиента через прокси на целевой сервер (UPLOAD)
+		redisClient.HIncrBy(ctx, "user_traffic:"+username, "upload_bytes", targetWriter.bytesWritten)
+		log.Printf("Пользователь %s: загружено %d байт (UPLOAD)", username, targetWriter.bytesWritten)
+	}
+	if clientWriter.bytesWritten > 0 { // Байты, полученные от целевого сервера и отправленные клиенту (DOWNLOAD)
+		redisClient.HIncrBy(ctx, "user_traffic:"+username, "download_bytes", clientWriter.bytesWritten)
+		log.Printf("Пользователь %s: скачано %d байт (DOWNLOAD)", username, clientWriter.bytesWritten)
+	}
 
 	if err1 != nil && err1 != io.EOF {
 		return fmt.Errorf("ошибка копирования клиент -> цель: %w", err1)
