@@ -527,13 +527,16 @@ func getTimeSeriesStats(c *gin.Context) {
 
 // parseTemplate парсит HTML-шаблон для фронтенда
 func parseTemplate() *template.Template {
+	// Использование "сырых" строковых литералов (`...`) позволяет вставлять многострочный текст без необходимости экранирования
+	// кавычек или новых строк. Это идеально подходит для встроенного HTML.
 	htmlContent := `
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The-ASTRACAT-SOCKS-Eliza Admin Panel</title> <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>The-ASTRACAT-SOCKS-Eliza Admin Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --background: #09090b;
@@ -653,9 +656,8 @@ func parseTemplate() *template.Template {
             margin-right: 10px;
             transition: background-color 0.2s ease;
         }
-
         .btn:hover {
-            background-color: color-mix(in srgb, var(--primary) 90%, black);
+            background-color: #8c42db; /* Slightly darker primary color */
         }
 
         .btn-secondary {
@@ -663,7 +665,7 @@ func parseTemplate() *template.Template {
             color: var(--secondary-foreground);
         }
         .btn-secondary:hover {
-            background-color: color-mix(in srgb, var(--secondary) 90%, black);
+            background-color: #1e1e20; /* Slightly darker secondary color */
         }
 
         .btn-danger {
@@ -671,7 +673,7 @@ func parseTemplate() *template.Template {
             color: var(--destructive-foreground);
         }
         .btn-danger:hover {
-            background-color: color-mix(in srgb, var(--destructive) 90%, black);
+            background-color: #c03939; /* Slightly darker destructive color */
         }
 
         .message {
@@ -726,7 +728,8 @@ func parseTemplate() *template.Template {
 <body>
     <div class="container">
         <div class="card full-width-card">
-            <h1>The-ASTRACAT-SOCKS-Eliza Admin Panel</h1> <div class="message" id="message" style="display:none;"></div>
+            <h1>The-ASTRACAT-SOCKS-Eliza Admin Panel</h1>
+            <div class="message" id="message" style="display:none;"></div>
 
             <div class="grid-3">
                 <div class="metric-card">
