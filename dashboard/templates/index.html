@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Панель мониторинга трафика</title>
+    <title>Панель мониторинга The-ASTRACAT-SOCKS-Eliza</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
@@ -15,42 +15,39 @@
     <h1>Панель мониторинга The-ASTRACAT-SOCKS-Eliza</h1>
 
     <div class="container">
-        <div id="summary-cards" class="cards-container">
-            <!-- Карточки со сводной статистикой будут здесь -->
+        <div id="error-message" class="error-container" style="display: none;"></div>
+
+        <div class="cards-container">
+            <div class="card">
+                <h3>Активных соединений</h3>
+                <p id="active-connections">0</p>
+            </div>
+            <div class="card">
+                <h3>Загружено (Upload)</h3>
+                <p id="total-upload">0 Bytes</p>
+            </div>
+            <div class="card">
+                <h3>Скачано (Download)</h3>
+                <p id="total-download">0 Bytes</p>
+            </div>
+            <div class="card">
+                <h3>Последнее обновление</h3>
+                <p id="last-update-time">-</p>
+            </div>
         </div>
 
         <div class="main-content">
             <div class="chart-container">
-                <canvas id="traffic-chart"></canvas>
+                <h2>Трафик по пользователям</h2>
+                <canvas id="user-traffic-chart"></canvas>
             </div>
             <div class="map-container">
+                <h2>Карта трафика по странам</h2>
                 <div id="traffic-map"></div>
             </div>
         </div>
 
-        <div class="chart-container">
-            <h2>Распределение трафика по API</h2>
-            <canvas id="api-traffic-chart"></canvas>
-        </div>
-
-        <div id="top-ip-stats">
-            <h2>Топ IP-адресов по потреблению трафика</h2>
-            <table id="top-ip-table">
-                <thead>
-                    <tr>
-                        <th>IP-адрес</th>
-                        <th>Загружено (Upload)</th>
-                        <th>Скачано (Download)</th>
-                        <th>Всего трафика</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <!-- Данные по топ IP будут здесь -->
-                </tbody>
-            </table>
-        </div>
-
-        <div id="user-stats">
+        <div id="user-stats" class="table-container">
             <h2>Статистика по пользователям</h2>
             <table id="user-stats-table">
                 <thead>
