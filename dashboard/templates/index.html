@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/static/countries.js"></script>
 </head>
@@ -25,6 +26,28 @@
             <div class="map-container">
                 <div id="traffic-map"></div>
             </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Распределение трафика по API</h2>
+            <canvas id="api-traffic-chart"></canvas>
+        </div>
+
+        <div id="top-ip-stats">
+            <h2>Топ IP-адресов по потреблению трафика</h2>
+            <table id="top-ip-table">
+                <thead>
+                    <tr>
+                        <th>IP-адрес</th>
+                        <th>Загружено (Upload)</th>
+                        <th>Скачано (Download)</th>
+                        <th>Всего трафика</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Данные по топ IP будут здесь -->
+                </tbody>
+            </table>
         </div>
 
         <div id="user-stats">
