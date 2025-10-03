@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultStatsPath = "/var/lib/astra_socks_eliza/stats.json"
+	defaultStatsPath = "./stats.json"
 	defaultPort      = "8080"
 )
 
