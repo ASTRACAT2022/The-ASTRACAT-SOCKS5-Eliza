@@ -25,8 +25,8 @@ const (
 	ipv6Address          = 0x04
 	replySuccess         = 0x00
 
-	statsFilePath    = "./stats.json" // Путь к файлу статистики
-	usersFilePath    = "./users.json"     // Путь к файлу пользователей
+	statsFilePath    = "/var/lib/astra_socks_eliza/stats.json" // Стандартизированный путь к файлу статистики
+	usersFilePath    = "/etc/astra_socks_eliza/users.json"     // Стандартизированный путь к файлу пользователей
 	geoIPDBPath      = "/usr/share/GeoIP/GeoLite2-Country.mmdb" // Путь к GeoIP базе данных
 )
 
