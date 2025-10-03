@@ -111,7 +111,7 @@ After=network.target
 User=$USER
 Group=$USER
 WorkingDirectory=$PROJECT_DIR
-ExecStart=$PROJECT_DIR/eliza_dashboard -port $PORT_DASHBOARD
+ExecStart=$PROJECT_DIR/eliza_dashboard
 Restart=always
 
 [Install]
@@ -145,19 +145,18 @@ echo "[+] Настройка пользователей..."
 
 if [ ! -f "/etc/astra_socks_eliza/users.json" ]; then
     echo "[+] Создание файла пользователей..."
+    # Создаем директорию, если ее нет
+    mkdir -p /etc/astra_socks_eliza
     cat > /etc/astra_socks_eliza/users.json << EOF
 {
-  "users": [
-    {
-      "username": "astranet",
-      "password": "astranet",
-      "limit": 1000000000,
-      "expire": 0
-    }
-  ]
+  "astranet": {
+    "username": "astranet",
+    "password": "astranet",
+    "enabled": true
+  }
 }
 EOF
-    echo "[+] Пользователь astranet:astranet создан."
+    echo "[+] Пользователь по умолчанию 'astranet' создан."
 fi
 
 # === Завершение ===

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eliza SOCKS5 Proxy Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Eliza SOCKS5 Proxy Dashboard</h1>
+        <div class="main-stats">
+            <div class="stat-card">
+                <h2>Total Upload</h2>
+                <p id="total-upload">0 B</p>
+            </div>
+            <div class="stat-card">
+                <h2>Total Download</h2>
+                <p id="total-download">0 B</p>
+            </div>
+            <div class="stat-card">
+                <h2>Active Connections</h2>
+                <p id="active-connections">0</p>
+            </div>
+        </div>
+
+        <div id="map"></div>
+
+        <div class="tables-container">
+            <div class="table-card">
+                <h2>Traffic by User</h2>
+                <table id="user-stats-table">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Upload</th>
+                            <th>Download</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="table-card">
+                <h2>Traffic by Country</h2>
+                <table id="country-stats-table">
+                    <thead>
+                        <tr>
+                            <th>Country</th>
+                            <th>Upload</th>
+                            <th>Download</th>
+                            <th>Connections</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="table-card">
+                <h2>Traffic by IP</h2>
+                <table id="ip-stats-table">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Upload</th>
+                            <th>Download</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <p class="last-updated">Last Updated: <span id="last-updated">Never</span></p>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="countries.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

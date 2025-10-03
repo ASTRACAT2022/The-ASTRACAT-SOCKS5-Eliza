@@ -52,13 +52,20 @@ type CountryStats struct {
 	Connections   int64 `json:"connections"`
 }
 
+// IPStats представляет статистику трафика для IP-адреса
+type IPStats struct {
+	UploadBytes   int64 `json:"uploadBytes"`
+	DownloadBytes int64 `json:"downloadBytes"`
+}
+
 // GlobalStats представляет общую статистику
 type GlobalStats struct {
 	TotalUploadBytes   int64                    `json:"totalUploadBytes"`
 	TotalDownloadBytes int64                    `json:"totalDownloadBytes"`
 	ActiveConnections  int32                    `json:"activeConnections"`
-	UserStats          map[string]UserTraffic   `json:"userStats"`          // Статистика по каждому пользователю
-	CountryStats       map[string]*CountryStats `json:"countryStats"`       // Статистика по странам (ключ - код страны)
+	UserStats          map[string]UserTraffic   `json:"userStats"`    // Статистика по каждому пользователю
+	CountryStats       map[string]*CountryStats `json:"countryStats"` // Статистика по странам (ключ - код страны)
+	IPStats            map[string]IPStats       `json:"ipStats"`      // Статистика по IP-адресам
 	LastUpdateTime     time.Time                `json:"lastUpdateTime"`
 }
 
@@ -67,9 +74,10 @@ var (
 	users      = make(map[string]User)      // key: username, value: User
 	usersMutex sync.RWMutex                 // Мьютекс для доступа к users
 
-	trafficStats = make(map[string]UserTraffic) // key: username, value: UserTraffic
+	trafficStats = make(map[string]UserTraffic)   // key: username, value: UserTraffic
 	countryStats = make(map[string]*CountryStats) // key: country code, value: stats
-	trafficMutex sync.RWMutex                   // Мьютекс для доступа к trafficStats и countryStats
+	ipStats      = make(map[string]IPStats)       // key: ip address, value: IPStats
+	trafficMutex sync.RWMutex                     // Мьютекс для доступа ко всем картам статистики
 
 	activeConnectionsCounter int32
 	activeConnectionsMutex   sync.Mutex
@@ -346,7 +354,7 @@ func handleSocks5Request(conn net.Conn, username string, clientIP string) error 
 	}
 
 	countryCode := getCountryCode(clientIP)
-	return proxyData(conn, targetConn, username, countryCode)
+	return proxyData(conn, targetConn, username, clientIP, countryCode)
 }
 
 // customWriter обертывает net.Conn и считает переданные байты
@@ -361,8 +369,8 @@ func (cw *customWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-//proxyData теперь собирает статистику в память для пользователей и стран
-func proxyData(clientConn, targetConn net.Conn, username, countryCode string) error {
+// proxyData теперь собирает статистику в память для пользователей, IP и стран
+func proxyData(clientConn, targetConn net.Conn, username, clientIP, countryCode string) error {
 	done := make(chan error, 2)
 
 	clientWriter := &customWriter{Writer: clientConn}
@@ -390,6 +398,12 @@ func proxyData(clientConn, targetConn net.Conn, username, countryCode string) er
 	userStats.UploadBytes += targetWriter.bytesWritten
 	userStats.DownloadBytes += clientWriter.bytesWritten
 	trafficStats[username] = userStats
+
+	// Обновляем статистику IP
+	ipS := ipStats[clientIP]
+	ipS.UploadBytes += targetWriter.bytesWritten
+	ipS.DownloadBytes += clientWriter.bytesWritten
+	ipStats[clientIP] = ipS
 
 	// Обновляем статистику страны
 	if countryCode != "XX" {
@@ -434,9 +448,14 @@ func saveStatsPeriodically(interval time.Duration) {
 		// Копируем статистику по странам
 		currentCountryStats := make(map[string]*CountryStats)
 		for code, stats := range countryStats {
-			// Создаем копию, чтобы избежать гонки данных при параллельной записи
 			sCopy := *stats
 			currentCountryStats[code] = &sCopy
+		}
+
+		// Копируем статистику по IP
+		currentIPStats := make(map[string]IPStats)
+		for ip, stats := range ipStats {
+			currentIPStats[ip] = stats
 		}
 
 		currentActiveConnections := activeConnectionsCounter
@@ -449,7 +468,8 @@ func saveStatsPeriodically(interval time.Duration) {
 			TotalDownloadBytes: totalDownload,
 			ActiveConnections:  currentActiveConnections,
 			UserStats:          currentUserStats,
-			CountryStats:       currentCountryStats, // Добавляем статистику по странам
+			CountryStats:       currentCountryStats,
+			IPStats:            currentIPStats,
 			LastUpdateTime:     time.Now(),
 		}
 
