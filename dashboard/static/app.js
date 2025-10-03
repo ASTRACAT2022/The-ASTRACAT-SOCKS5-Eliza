@@ -141,11 +141,47 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Функция для получения цвета в зависимости от объема трафика
+    function getTrafficColor(traffic, minTraffic, maxTraffic) {
+        if (traffic === 0) return "#78c850"; // Зеленый для нулевого трафика
+
+        // Нормализуем значение от 0 до 1
+        const ratio = (Math.log(traffic + 1) - Math.log(minTraffic + 1)) / (Math.log(maxTraffic + 1) - Math.log(minTraffic + 1));
+
+        // Простой градиент от зеленого к желтому и к красному
+        if (ratio < 0.5) {
+            // от зеленого (0, 255, 0) к желтому (255, 255, 0)
+            const green = 255;
+            const red = Math.round(255 * (ratio * 2));
+            return `rgb(${red}, ${green}, 0)`;
+        } else {
+            // от желтого (255, 255, 0) к красному (255, 0, 0)
+            const red = 255;
+            const green = Math.round(255 * (1 - (ratio - 0.5) * 2));
+            return `rgb(${red}, ${green}, 0)`;
+        }
+    }
+
+
     // Функция для обновления карты
     function updateMap(countryStats) {
         mapMarkersLayer.clearLayers(); // Очищаем старые маркеры
 
-        if (!countryStats) return;
+        if (!countryStats || Object.keys(countryStats).length === 0) return;
+
+        // Находим минимальный и максимальный трафик для масштабирования
+        let minTraffic = Infinity;
+        let maxTraffic = -Infinity;
+        for (const code in countryStats) {
+            const traffic = countryStats[code].uploadBytes + countryStats[code].downloadBytes;
+            if (traffic < minTraffic) minTraffic = traffic;
+            if (traffic > maxTraffic) maxTraffic = traffic;
+        }
+        // Если только одна точка данных, установим мин = 0 для градиента
+        if (minTraffic === maxTraffic) {
+            minTraffic = 0;
+        }
+
 
         for (const countryCode in countryStats) {
             const stats = countryStats[countryCode];
@@ -153,23 +189,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (coords) {
                 const totalTraffic = stats.uploadBytes + stats.downloadBytes;
-                // Рассчитываем радиус в зависимости от трафика
-                const radius = Math.log(totalTraffic + 1) * 2;
+                if (totalTraffic === 0) continue; // Не будем показывать страны без трафика
+
+                // Рассчитываем радиус в зависимости от трафика (логарифмическая шкала)
+                const radius = Math.log(totalTraffic + 1) * 1.5 + 3;
+
+                // Получаем цвет на основе трафика
+                const color = getTrafficColor(totalTraffic, minTraffic, maxTraffic);
 
                 const marker = L.circleMarker([coords.lat, coords.lon], {
-                    radius: radius < 5 ? 5 : radius, // Минимальный радиус
-                    fillColor: "#ff4d4d",
-                    color: "#b30000",
-                    weight: 1,
-                    fillOpacity: 0.7
+                    radius: radius,
+                    fillColor: color,
+                    color: color, // Используем тот же цвет для границы
+                    weight: 2,
+                    fillOpacity: 0.8
                 });
 
                 // Добавляем всплывающее окно
                 marker.bindPopup(`
                     <b>Страна:</b> ${countryCode}<br>
                     <b>Соединений:</b> ${stats.connections}<br>
-                    <b>Загружено:</b> ${formatBytes(stats.uploadBytes)}<br>
-                    <b>Скачано:</b> ${formatBytes(stats.downloadBytes)}
+                    <b>Трафик:</b> ${formatBytes(totalTraffic)}<br>
+                    <small>(Загружено: ${formatBytes(stats.uploadBytes)}, Скачано: ${formatBytes(stats.downloadBytes)})</small>
                 `);
 
                 mapMarkersLayer.addLayer(marker);
