@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultStatsPath = "./stats.json"
+	defaultStatsPath = "/var/lib/astra_socks_eliza/stats.json" // Стандартизированный путь
 	defaultPort      = "8080"
 )
 
