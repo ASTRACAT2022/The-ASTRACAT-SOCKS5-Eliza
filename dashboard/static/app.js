@@ -143,23 +143,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Функция для получения цвета в зависимости от объема трафика
     function getTrafficColor(traffic, minTraffic, maxTraffic) {
-        if (traffic === 0) return "#78c850"; // Зеленый для нулевого трафика
-
-        // Нормализуем значение от 0 до 1
-        const ratio = (Math.log(traffic + 1) - Math.log(minTraffic + 1)) / (Math.log(maxTraffic + 1) - Math.log(minTraffic + 1));
-
-        // Простой градиент от зеленого к желтому и к красному
-        if (ratio < 0.5) {
-            // от зеленого (0, 255, 0) к желтому (255, 255, 0)
-            const green = 255;
-            const red = Math.round(255 * (ratio * 2));
-            return `rgb(${red}, ${green}, 0)`;
-        } else {
-            // от желтого (255, 255, 0) к красному (255, 0, 0)
-            const red = 255;
-            const green = Math.round(255 * (1 - (ratio - 0.5) * 2));
-            return `rgb(${red}, ${green}, 0)`;
+        if (maxTraffic === minTraffic) {
+            return "#ff4d4d"; // Если трафик везде одинаковый, используем красный
         }
+        if (traffic === 0) {
+            return "#78c850"; // Зеленый для нулевого трафика
+        }
+
+        // Нормализуем значение от 0 до 1, используя логарифмическую шкалу
+        const logMin = Math.log(minTraffic + 1);
+        const logMax = Math.log(maxTraffic + 1);
+        const logTraffic = Math.log(traffic + 1);
+
+        const ratio = (logTraffic - logMin) / (logMax - logMin);
+
+        // HSL градиент от зеленого (120) к красному (0)
+        const hue = (1 - ratio) * 120;
+        return `hsl(${hue}, 100%, 50%)`;
     }
 
 
