@@ -1,124 +1,156 @@
 {
   "connections": [
     {
-      "user": "test",
-      "src_ip": "192.168.1.13",
-      "dst_ip": "140.82.121.4",
-      "upload": 69399725,
-      "download": 9207464,
-      "api": "google"
-    },
-    {
       "user": "user1",
       "src_ip": "192.168.1.16",
-      "dst_ip": "216.58.214.174",
-      "upload": 45234440,
-      "download": 34721958,
+      "dst_ip": "192.30.255.112",
+      "upload": 100389269,
+      "download": 35401526,
+      "api": "youtube"
+    },
+    {
+      "user": "test",
+      "src_ip": "192.168.1.15",
+      "dst_ip": "208.67.222.222",
+      "upload": 79174002,
+      "download": 87725291,
       "api": "tiktok"
     },
     {
-      "user": "test",
-      "src_ip": "192.168.1.14",
-      "dst_ip": "208.67.220.220",
-      "upload": 40435674,
-      "download": 68034498,
+      "user": "user2",
+      "src_ip": "192.168.1.11",
+      "dst_ip": "35.190.247.0",
+      "upload": 48606406,
+      "download": 79782436,
       "api": "google"
     },
     {
       "user": "guest",
-      "src_ip": "192.168.1.16",
-      "dst_ip": "54.231.0.37",
-      "upload": 74753594,
-      "download": 26349721,
+      "src_ip": "192.168.1.15",
+      "dst_ip": "1.1.1.1",
+      "upload": 52321178,
+      "download": 19491788,
       "api": "amazon"
     },
     {
-      "user": "user2",
-      "src_ip": "192.168.1.15",
-      "dst_ip": "13.107.42.16",
-      "upload": 70340193,
-      "download": 24587807,
-      "api": "stackoverflow"
+      "user": "guest",
+      "src_ip": "192.168.1.10",
+      "dst_ip": "142.250.185.78",
+      "upload": 55357480,
+      "download": 103576249,
+      "api": "netflix"
     },
     {
-      "user": "admin",
-      "src_ip": "192.168.1.16",
-      "dst_ip": "151.101.1.140",
-      "upload": 83320309,
-      "download": 31486617,
-      "api": "tiktok"
+      "user": "test",
+      "src_ip": "192.168.1.11",
+      "dst_ip": "52.216.239.53",
+      "upload": 62293407,
+      "download": 8275752,
+      "api": "youtube"
     },
     {
-      "user": "user2",
+      "user": "user3",
+      "src_ip": "192.168.1.17",
+      "dst_ip": "142.250.185.110",
+      "upload": 56002313,
+      "download": 9387938,
+      "api": "twitter"
+    },
+    {
+      "user": "test",
+      "src_ip": "192.168.1.13",
+      "dst_ip": "1.1.1.1",
+      "upload": 73741978,
+      "download": 84731264,
+      "api": "amazon"
+    },
+    {
+      "user": "guest",
       "src_ip": "192.168.1.14",
-      "dst_ip": "142.250.185.46",
-      "upload": 32706307,
-      "download": 91771037,
+      "dst_ip": "172.217.20.174",
+      "upload": 84529480,
+      "download": 85324776,
+      "api": "instagram"
+    },
+    {
+      "user": "user2",
+      "src_ip": "192.168.1.16",
+      "dst_ip": "142.250.185.110",
+      "upload": 7832323,
+      "download": 78599113,
+      "api": "netflix"
+    },
+    {
+      "user": "guest",
+      "src_ip": "192.168.1.13",
+      "dst_ip": "23.23.212.126",
+      "upload": 17845113,
+      "download": 98152616,
+      "api": "twitter"
+    },
+    {
+      "user": "user1",
+      "src_ip": "192.168.1.17",
+      "dst_ip": "8.8.8.8",
+      "upload": 100577349,
+      "download": 54901268,
+      "api": "twitter"
+    },
+    {
+      "user": "user3",
+      "src_ip": "192.168.1.14",
+      "dst_ip": "54.231.0.37",
+      "upload": 10614260,
+      "download": 17529839,
+      "api": "google"
+    },
+    {
+      "user": "guest",
+      "src_ip": "192.168.1.11",
+      "dst_ip": "99.84.239.80",
+      "upload": 84767567,
+      "download": 97101546,
       "api": "github"
     },
     {
       "user": "test",
       "src_ip": "192.168.1.13",
-      "dst_ip": "8.8.8.8",
-      "upload": 68492147,
-      "download": 14311732,
-      "api": "stackoverflow"
-    },
-    {
-      "user": "test",
-      "src_ip": "192.168.1.15",
-      "dst_ip": "208.67.220.220",
-      "upload": 35352198,
-      "download": 7310487,
+      "dst_ip": "1.1.1.1",
+      "upload": 69682372,
+      "download": 101729848,
       "api": "google"
-    },
-    {
-      "user": "user3",
-      "src_ip": "192.168.1.11",
-      "dst_ip": "208.67.222.222",
-      "upload": 8390054,
-      "download": 65414688,
-      "api": "netflix"
-    },
-    {
-      "user": "user2",
-      "src_ip": "192.168.1.13",
-      "dst_ip": "35.186.224.25",
-      "upload": 7998721,
-      "download": 22502474,
-      "api": "amazon"
-    },
-    {
-      "user": "user2",
-      "src_ip": "192.168.1.14",
-      "dst_ip": "185.199.108.153",
-      "upload": 15286257,
-      "download": 52382386,
-      "api": "twitter"
     },
     {
       "user": "guest",
       "src_ip": "192.168.1.14",
-      "dst_ip": "23.23.212.126",
-      "upload": 81531683,
-      "download": 31443273,
-      "api": "stackoverflow"
+      "dst_ip": "35.190.247.0",
+      "upload": 16879817,
+      "download": 69283218,
+      "api": "facebook"
     },
     {
-      "user": "admin",
-      "src_ip": "192.168.1.10",
-      "dst_ip": "140.82.121.4",
-      "upload": 98330260,
-      "download": 34917869,
-      "api": "netflix"
+      "user": "user2",
+      "src_ip": "192.168.1.14",
+      "dst_ip": "208.67.220.220",
+      "upload": 30717378,
+      "download": 63328293,
+      "api": "instagram"
     },
     {
       "user": "user1",
-      "src_ip": "192.168.1.10",
-      "dst_ip": "35.186.224.25",
-      "upload": 95349927,
-      "download": 52322496,
-      "api": "netflix"
+      "src_ip": "192.168.1.17",
+      "dst_ip": "140.82.121.4",
+      "upload": 64219497,
+      "download": 39051326,
+      "api": "tiktok"
+    },
+    {
+      "user": "user3",
+      "src_ip": "192.168.1.16",
+      "dst_ip": "1.1.1.1",
+      "upload": 73709411,
+      "download": 15006119,
+      "api": "github"
     }
   ]
 }
