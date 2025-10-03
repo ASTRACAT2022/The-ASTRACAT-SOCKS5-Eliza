@@ -476,7 +476,7 @@ async function fetchData() {
         const data = await response.json();
         
         // Добавляем случайные API для тестирования, если их нет
-        if (!data.connections[0].api) {
+        if (data.connections && data.connections.length > 0 && !data.connections[0].api) {
             const apis = ['facebook', 'google', 'twitter', 'instagram', 'tiktok', 'youtube'];
             data.connections.forEach(conn => {
                 conn.api = apis[Math.floor(Math.random() * apis.length)];

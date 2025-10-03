@@ -25,8 +25,8 @@ const (
 	ipv6Address          = 0x04
 	replySuccess         = 0x00
 
-	statsFilePath    = "/var/lib/astra_socks_eliza/stats.json" // Путь к файлу статистики
-	usersFilePath    = "/etc/astra_socks_eliza/users.json"     // Путь к файлу пользователей
+	statsFilePath    = "./stats.json" // Путь к файлу статистики
+	usersFilePath    = "./users.json"     // Путь к файлу пользователей
 	geoIPDBPath      = "/usr/share/GeoIP/GeoLite2-Country.mmdb" // Путь к GeoIP базе данных
 )
 
@@ -361,7 +361,7 @@ func (cw *customWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-// proxyData теперь собирает статистику в память для пользователей и стран
+//proxyData теперь собирает статистику в память для пользователей и стран
 func proxyData(clientConn, targetConn net.Conn, username, countryCode string) error {
 	done := make(chan error, 2)
 
