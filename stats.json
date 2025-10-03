@@ -1,0 +1,27 @@
+{
+  "activeConnections": 1,
+  "totalUploadBytes": 1000000,
+  "totalDownloadBytes": 5000000,
+  "userStats": {
+    "user1": {
+      "uploadBytes": 1000000,
+      "downloadBytes": 2000000
+    },
+    "user2": {
+      "uploadBytes": 0,
+      "downloadBytes": 3000000
+    }
+  },
+  "countryStats": {
+    "US": {
+      "connections": 1,
+      "uploadBytes": 500000,
+      "downloadBytes": 1000000
+    },
+    "DE": {
+      "connections": 1,
+      "uploadBytes": 500000,
+      "downloadBytes": 4000000
+    }
+  }
+}
