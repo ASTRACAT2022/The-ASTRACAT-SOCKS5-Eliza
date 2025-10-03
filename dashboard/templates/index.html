@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Панель мониторинга трафика</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/static/countries.js"></script>
+</head>
+<body>
+    <h1>Панель мониторинга The-ASTRACAT-SOCKS-Eliza</h1>
+
+    <div class="container">
+        <div id="summary-cards" class="cards-container">
+            <!-- Карточки со сводной статистикой будут здесь -->
+        </div>
+
+        <div class="main-content">
+            <div class="chart-container">
+                <canvas id="traffic-chart"></canvas>
+            </div>
+            <div class="map-container">
+                <div id="traffic-map"></div>
+            </div>
+        </div>
+
+        <div id="user-stats">
+            <h2>Статистика по пользователям</h2>
+            <table id="user-stats-table">
+                <thead>
+                    <tr>
+                        <th>Пользователь</th>
+                        <th>Загружено (Upload)</th>
+                        <th>Скачано (Download)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Данные по пользователям будут здесь -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
