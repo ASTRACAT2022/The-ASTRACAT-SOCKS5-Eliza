@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/oschwald/geoip2-golang"
 )
 
 const (
@@ -23,8 +25,9 @@ const (
 	ipv6Address          = 0x04
 	replySuccess         = 0x00
 
-	statsFilePath = "/var/lib/astra_socks_eliza/stats.json" // Путь к файлу статистики
-	usersFilePath = "/etc/astra_socks_eliza/users.json"     // Путь к файлу пользователей
+	statsFilePath    = "/var/lib/astra_socks_eliza/stats.json" // Путь к файлу статистики
+	usersFilePath    = "/etc/astra_socks_eliza/users.json"     // Путь к файлу пользователей
+	geoIPDBPath      = "/usr/share/GeoIP/GeoLite2-Country.mmdb" // Путь к GeoIP базе данных
 )
 
 // --- Структуры данных для пользователей и статистики (в памяти) ---
@@ -42,13 +45,21 @@ type UserTraffic struct {
 	DownloadBytes int64 `json:"downloadBytes"`
 }
 
+// CountryStats представляет статистику по стране
+type CountryStats struct {
+	UploadBytes   int64 `json:"uploadBytes"`
+	DownloadBytes int64 `json:"downloadBytes"`
+	Connections   int64 `json:"connections"`
+}
+
 // GlobalStats представляет общую статистику
 type GlobalStats struct {
-	TotalUploadBytes   int64                     `json:"totalUploadBytes"`
-	TotalDownloadBytes int64                     `json:"totalDownloadBytes"`
-	ActiveConnections  int32                     `json:"activeConnections"`
-	UserStats          map[string]UserTraffic    `json:"userStats"` // Статистика по каждому пользователю
-	LastUpdateTime     time.Time                 `json:"lastUpdateTime"`
+	TotalUploadBytes   int64                    `json:"totalUploadBytes"`
+	TotalDownloadBytes int64                    `json:"totalDownloadBytes"`
+	ActiveConnections  int32                    `json:"activeConnections"`
+	UserStats          map[string]UserTraffic   `json:"userStats"`          // Статистика по каждому пользователю
+	CountryStats       map[string]*CountryStats `json:"countryStats"`       // Статистика по странам (ключ - код страны)
+	LastUpdateTime     time.Time                `json:"lastUpdateTime"`
 }
 
 // Глобальные хранилища в памяти
@@ -57,10 +68,13 @@ var (
 	usersMutex sync.RWMutex                 // Мьютекс для доступа к users
 
 	trafficStats = make(map[string]UserTraffic) // key: username, value: UserTraffic
-	trafficMutex sync.RWMutex                 // Мьютекс для доступа к trafficStats
+	countryStats = make(map[string]*CountryStats) // key: country code, value: stats
+	trafficMutex sync.RWMutex                   // Мьютекс для доступа к trafficStats и countryStats
 
 	activeConnectionsCounter int32
 	activeConnectionsMutex   sync.Mutex
+
+	geoDB *geoip2.Reader // Указатель на ридер GeoIP базы
 )
 
 // init вызывается один раз при запуске программы
@@ -72,6 +86,15 @@ func init() {
 		users["astranet"] = User{Username: "astranet", Password: "astranet", Enabled: true}
 	} else {
 		log.Printf("Пользователи загружены из %s.", usersFilePath)
+	}
+
+	// Попытка загрузить GeoIP базу данных
+	var err error
+	geoDB, err = geoip2.Open(geoIPDBPath)
+	if err != nil {
+		log.Printf("Внимание: Не удалось загрузить GeoIP базу данных из %s: %v. Сбор геолокационной статистики будет отключен.", geoIPDBPath, err)
+	} else {
+		log.Printf("GeoIP база данных успешно загружена из %s.", geoIPDBPath)
 	}
 
 	log.Println("Порт SOCKS5: 7777")
@@ -127,7 +150,24 @@ func handleConnection(conn net.Conn) {
 		activeConnectionsCounter--
 		activeConnectionsMutex.Unlock()
 	}()
-	// log.Printf("Новое соединение от: %s", conn.RemoteAddr()) // Закомментировано для минимальных логов
+
+	clientIP, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		log.Printf("Не удалось получить IP клиента %s: %v", conn.RemoteAddr(), err)
+		clientIP = "unknown" // На всякий случай
+	}
+
+	// Обновляем счетчик подключений для страны
+	countryCode := getCountryCode(clientIP)
+	if countryCode != "XX" {
+		trafficMutex.Lock()
+		if stats, ok := countryStats[countryCode]; ok {
+			stats.Connections++
+		} else {
+			countryStats[countryCode] = &CountryStats{Connections: 1}
+		}
+		trafficMutex.Unlock()
+	}
 
 	username, err := socks5Handshake(conn)
 	if err != nil {
@@ -135,7 +175,7 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	if err := handleSocks5Request(conn, username); err != nil {
+	if err := handleSocks5Request(conn, username, clientIP); err != nil {
 		log.Printf("Ошибка SOCKS5 запроса для %s (пользователь %s): %v", conn.RemoteAddr(), username, err)
 		return
 	}
@@ -232,7 +272,7 @@ func authenticateUserPass(conn net.Conn) (string, error) {
 	return username, nil
 }
 
-func handleSocks5Request(conn net.Conn, username string) error {
+func handleSocks5Request(conn net.Conn, username string, clientIP string) error {
 	buf := make([]byte, 4)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
@@ -291,7 +331,6 @@ func handleSocks5Request(conn net.Conn, username string) error {
 	destPort = int(portBuf[0])<<8 | int(portBuf[1])
 
 	target := net.JoinHostPort(destAddr, strconv.Itoa(destPort))
-	// log.Printf("Клиент %s (%s) запрашивает соединение с %s", conn.RemoteAddr(), username, target) // Закомментировано для минимальных логов
 
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
@@ -306,8 +345,8 @@ func handleSocks5Request(conn net.Conn, username string) error {
 		return fmt.Errorf("ошибка отправки ответа об успехе: %w", err)
 	}
 
-	// log.Printf("Установлено прокси-соединение: %s (%s) <-> %s", conn.RemoteAddr(), username, target) // Закомментировано для минимальных логов
-	return proxyData(conn, targetConn, username)
+	countryCode := getCountryCode(clientIP)
+	return proxyData(conn, targetConn, username, countryCode)
 }
 
 // customWriter обертывает net.Conn и считает переданные байты
@@ -322,8 +361,8 @@ func (cw *customWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-// proxyData теперь собирает статистику в память
-func proxyData(clientConn, targetConn net.Conn, username string) error {
+// proxyData теперь собирает статистику в память для пользователей и стран
+func proxyData(clientConn, targetConn net.Conn, username, countryCode string) error {
 	done := make(chan error, 2)
 
 	clientWriter := &customWriter{Writer: clientConn}
@@ -343,14 +382,26 @@ func proxyData(clientConn, targetConn net.Conn, username string) error {
 	err2 := <-done
 
 	// Обновляем статистику в памяти
-	trafficMutex.Lock() // Используем Lock для записи
-	stats := trafficStats[username]
-	stats.UploadBytes += targetWriter.bytesWritten   // UPLOAD для пользователя
-	stats.DownloadBytes += clientWriter.bytesWritten // DOWNLOAD для пользователя
-	trafficStats[username] = stats
-	trafficMutex.Unlock()
+	trafficMutex.Lock()
+	defer trafficMutex.Unlock()
 
-	// log.Printf("Пользователь %s: загружено %d байт (UPLOAD), скачано %d байт (DOWNLOAD) за сессию.", username, targetWriter.bytesWritten, clientWriter.bytesWritten) // Закомментировано
+	// Обновляем статистику пользователя
+	userStats := trafficStats[username]
+	userStats.UploadBytes += targetWriter.bytesWritten
+	userStats.DownloadBytes += clientWriter.bytesWritten
+	trafficStats[username] = userStats
+
+	// Обновляем статистику страны
+	if countryCode != "XX" {
+		cStats, ok := countryStats[countryCode]
+		if !ok {
+			cStats = &CountryStats{}
+			countryStats[countryCode] = cStats
+		}
+		cStats.UploadBytes += targetWriter.bytesWritten
+		cStats.DownloadBytes += clientWriter.bytesWritten
+		// Note: Connections are counted once per handleConnection, not here
+	}
 
 	if err1 != nil && err1 != io.EOF {
 		return fmt.Errorf("ошибка копирования клиент -> цель: %w", err1)
@@ -377,7 +428,15 @@ func saveStatsPeriodically(interval time.Duration) {
 		for username, stats := range trafficStats {
 			totalUpload += stats.UploadBytes
 			totalDownload += stats.DownloadBytes
-			currentUserStats[username] = stats // Копируем статистику каждого пользователя
+			currentUserStats[username] = stats
+		}
+
+		// Копируем статистику по странам
+		currentCountryStats := make(map[string]*CountryStats)
+		for code, stats := range countryStats {
+			// Создаем копию, чтобы избежать гонки данных при параллельной записи
+			sCopy := *stats
+			currentCountryStats[code] = &sCopy
 		}
 
 		currentActiveConnections := activeConnectionsCounter
@@ -390,6 +449,7 @@ func saveStatsPeriodically(interval time.Duration) {
 			TotalDownloadBytes: totalDownload,
 			ActiveConnections:  currentActiveConnections,
 			UserStats:          currentUserStats,
+			CountryStats:       currentCountryStats, // Добавляем статистику по странам
 			LastUpdateTime:     time.Now(),
 		}
 
@@ -405,9 +465,30 @@ func saveStatsPeriodically(interval time.Duration) {
 			log.Printf("Ошибка при записи статистики в файл %s: %v", statsFilePath, err)
 		}
 		file.Close()
-		// log.Printf("Статистика сохранена в %s", statsFilePath) // Закомментировано для минимальных логов
 	}
 }
+
+// getCountryCode определяет код страны по IP-адресу.
+// Возвращает "XX" в случае ошибки или если база данных недоступна.
+func getCountryCode(ipStr string) string {
+	if geoDB == nil {
+		return "XX" // База данных не загружена
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return "XX" // Невалидный IP
+	}
+
+	record, err := geoDB.Country(ip)
+	if err != nil {
+		// log.Printf("Не удалось определить страну для IP %s: %v", ipStr, err)
+		return "XX"
+	}
+
+	return record.Country.IsoCode
+}
+
 
 // loadUsersFromFile загружает пользователей из JSON-файла
 func loadUsersFromFile() error {

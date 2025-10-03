@@ -1,68 +1,72 @@
-Creater * **Telegram-канал:** [ASTRACAT UI](https://t.me/astracatui)  ([@astracatui](https://t.me/astracatui))
-````markdown
 # The-ASTRACAT-SOCKS-Eliza
 
-The-ASTRACAT-SOCKS-Eliza — это легковесный SOCKS5 прокси-сервер с аутентификацией по логину/паролю, написанный на Go. Он предназначен для простой установки и использования на серверах Linux с минимальным объемом логов и доступом к статистике по запросу.
+The-ASTRACAT-SOCKS-Eliza — это легковесный SOCKS5 прокси-сервер на Go с аутентификацией по логину/паролю и встроенной **веб-панелью для мониторинга трафика в реальном времени**.
 
 ## Особенности
 
-* **SOCKS5 Проксирование:** Поддерживает базовое SOCKS5 проксирование.
-* **Аутентификация:** Требует аутентификации по логину и паролю.
-* **Управление пользователями через файл:** Пользователи хранятся в простом JSON-файле, который можно легко редактировать.
-* **Минимальное логирование:** Основной сервис логирует только критические события и успешные аутентификации в `systemd journal`, чтобы не засорять логи.
-* **Статистика по запросу:** Общая статистика трафика и активных соединений, а также трафик по каждому пользователю сохраняется в JSON-файл и может быть просмотрена с помощью отдельной утилиты.
-* **Легковесный:** Написан на Go, что обеспечивает высокую производительность и низкое потребление ресурсов.
+- **SOCKS5 Проксирование:** Поддержка стандартного протокола SOCKS5.
+- **Аутентификация:** Защита доступа с помощью логина и пароля.
+- **Управление пользователями:** Пользователи легко управляются через редактирование JSON-файла.
+- **Веб-панель мониторинга ("Трафик-Радар"):**
+    - **Сводная статистика:** Активные соединения, общий трафик (upload/download).
+    - **Статистика по пользователям:** Графики и таблицы с трафиком для каждого пользователя.
+    - **Карта трафика:** Интерактивная карта мира, показывающая, из каких стран идут подключения, с визуализацией объема трафика.
+    - **Настраиваемый порт:** Панель мониторинга может быть запущена на любом порту.
+- **Геолокация:** Автоматическое определение страны клиента по IP-адресу (требуется база данных GeoLite2).
+- **Минимальное логирование:** Логируются только критические события и успешные аутентификации для экономии дискового пространства.
+- **Высокая производительность:** Низкое потребление ресурсов благодаря Go.
 
-## Установка и запуск
+## Установка
 
-Следуйте этим шагам для установки и запуска The-ASTRACAT-SOCKS-Eliza на вашей системе Linux. Предполагается, что у вас уже установлен Go.
+### 1. Подготовка
 
-### 1. Клонирование репозитория (или создание файлов вручную)
-git clone https://github.com/ASTRACAT2022/The-ASTRACAT-SOKS-Eliza.git
-Если у вас нет репозитория, создайте директорию проекта и файлы `main.go` и `get_eliza_stats.go` вручную.
+- Убедитесь, что у вас установлен **Go (версия 1.18 или новее)**.
+- Клонируйте репозиторий:
+  ```bash
+  git clone https://github.com/ASTRACAT2022/The-ASTRACAT-SOKS-Eliza.git
+  cd The-ASTRACAT-SOKS-Eliza
+  ```
 
-```bash
-# Создайте директорию проекта, если она еще не существует
-mkdir -p /root/The-ASTRACAT-SOKS-Eliza
-cd /root/The-ASTRACAT-SOKS-Eliza
+### 2. (Опционально) Настройка геолокации
 
-# Создайте файл main.go и вставьте в него код (см. выше в истории чата или из вашего рабочего файла)
-nano main.go
+Для работы карты трафика необходима база данных **GeoLite2 Country**.
 
-# Создайте файл get_eliza_stats.go (где угодно, потом переместим)
-nano ~/get_eliza_stats.go
-# Вставьте код для утилиты (см. выше в истории чата)
-````
+1.  Скачайте бесплатную базу данных `GeoLite2-Country.mmdb` с официального сайта [MaxMind](https://www.maxmind.com/en/geolite2/signup).
+2.  Создайте директорию и поместите в нее файл базы данных:
+    ```bash
+    sudo mkdir -p /usr/share/GeoIP
+    sudo mv /путь/к/вашему/GeoLite2-Country.mmdb /usr/share/GeoIP/GeoLite2-Country.mmdb
+    ```
+> **Примечание:** Если база данных не будет найдена, прокси-сервер и панель мониторинга все равно будут работать, но без сбора и отображения геолокационной статистики.
 
-### 2\. Сборка основного прокси-сервера
+### 3. Сборка
 
-Перейдите в директорию проекта и скомпилируйте `main.go`:
+Проект состоит из двух частей: самого прокси-сервера и сервера для панели мониторинга.
 
-```bash
-cd /root/The-ASTRACAT-SOKS-Eliza
-go build -o astra_socks_eliza main.go
-```
+1.  **Загрузка зависимостей:**
+    ```bash
+    go mod tidy
+    ```
+2.  **Сборка прокси-сервера:**
+    ```bash
+    go build -o astra_socks_eliza main.go
+    ```
+3.  **Сборка сервера панели мониторинга:**
+    ```bash
+    go build -o eliza_dashboard dashboard/dashboard.go
+    ```
 
-### 3\. Сборка утилиты для просмотра статистики
+### 4. Настройка сервисов `systemd`
 
-Перейдите в вашу домашнюю директорию, скомпилируйте утилиту и переместите её в системный PATH:
+Рекомендуется настроить автозапуск обоих сервисов с помощью `systemd`.
 
-```bash
-cd ~
-go build -o get_eliza_stats get_eliza_stats.go
-sudo mv get_eliza_stats /usr/local/bin/
-```
+#### а) Сервис для прокси (`astra-socks-eliza.service`)
 
-### 4\. Настройка сервиса `systemd`
-
-Создайте файл юнита `systemd` для автоматического запуска прокси-сервера:
-
+Создайте файл `/etc/systemd/system/astra-socks-eliza.service`:
 ```bash
 sudo nano /etc/systemd/system/astra-socks-eliza.service
 ```
-
-Вставьте следующее содержимое:
-
+Вставьте следующее содержимое (замените `/path/to/project` на ваш реальный путь):
 ```ini
 [Unit]
 Description=The-ASTRACAT-SOCKS-Eliza Proxy Server
@@ -71,122 +75,85 @@ After=network.target
 [Service]
 User=root
 Group=root
-WorkingDirectory=/root/The-ASTRACAT-SOKS-Eliza
-ExecStart=/root/The-ASTRACAT-SOKS-Eliza/astra_socks_eliza
-StandardOutput=null      # Перенаправляем стандартный вывод в /dev/null
-StandardError=journal    # Ошибки будут попадать в journald
+WorkingDirectory=/path/to/project
+ExecStart=/path/to/project/astra_socks_eliza
+StandardOutput=null
+StandardError=journal
 Restart=always
-RestartSec=5s
-JournalMaxRetentionSec=10m # Хранить логи этого сервиса в journald не более 10 минут
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Сохраните файл (`Ctrl+O`, `Enter`, `Ctrl+X`).
+#### б) Сервис для панели мониторинга (`eliza-dashboard.service`)
 
-### 5\. Запуск сервиса
+Создайте файл `/etc/systemd/system/eliza-dashboard.service`:
+```bash
+sudo nano /etc/systemd/system/eliza-dashboard.service
+```
+Вставьте следующее содержимое (замените `/path/to/project` и порт, если нужно):
+```ini
+[Unit]
+Description=Dashboard for The-ASTRACAT-SOCKS-Eliza
+After=network.target
 
-Перезагрузите `systemd`, включите автозапуск и запустите сервис:
+[Service]
+User=root
+Group=root
+WorkingDirectory=/path/to/project
+# Запуск панели на порту 8080. Вы можете изменить порт.
+ExecStart=/path/to/project/eliza_dashboard -port 8080
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 5. Запуск сервисов
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable astra-socks-eliza
-sudo systemctl start astra-socks-eliza
+sudo systemctl enable --now astra-socks-eliza.service
+sudo systemctl enable --now eliza-dashboard.service
 ```
 
-### 6\. Проверка статуса сервиса
+### 6. Настройка брандмауэра
 
-Убедитесь, что прокси-сервер запущен:
-
+Не забудьте открыть порты в вашем брандмауэре (например, UFW):
 ```bash
-sudo systemctl status astra-socks-eliza
-```
-
-Вывод должен показать `Active: active (running)`.
-
-### 7\. Настройка правил брандмауэра (UFW)
-
-Если вы используете UFW, разрешите входящие соединения на порт `7777` (или любой другой порт, который вы настроили):
-
-```bash
-sudo ufw allow 7777/tcp
-sudo ufw enable # Включите UFW, если он еще не активен. Будьте осторожны!
+sudo ufw allow 7777/tcp  # Порт для SOCKS5 прокси
+sudo ufw allow 8080/tcp # Порт для панели мониторинга
+sudo ufw enable
 ```
 
 ## Использование
 
-### Проксирование
+### Прокси-сервер
 
-Прокси-сервер SOCKS5 будет слушать на порту `7777`. Вы можете настроить свой клиент (браузер, приложение) для использования прокси по адресу `ВАШ_IP_СЕРВЕРА:7777` с аутентификацией по логину/паролю.
+- **Адрес:** `ВАШ_IP_СЕРВЕРА`
+- **Порт:** `7777`
+- **Аутентификация:** Логин/пароль
 
 ### Управление пользователями
 
-Пользователи хранятся в JSON-файле по пути `/etc/astra_socks_eliza/users.json`. При первом запуске сервиса, если этот файл не существует, он будет создан с тестовым пользователем `astranet:astranet`.
+Пользователи хранятся в файле `/etc/astra_socks_eliza/users.json`. При первом запуске он создается автоматически с пользователем `astranet:astranet`.
 
-Чтобы добавить, удалить или изменить пользователей:
-
-1.  Отредактируйте файл `users.json`:
-    ```bash
-    sudo nano /etc/astra_socks_eliza/users.json
-    ```
-    Пример содержимого:
-    ```json
-    {
-      "astranet": {
-        "username": "astranet",
-        "password": "astranet",
-        "enabled": true
-      },
-      "newuser": {
-        "username": "newuser",
-        "password": "strong_password",
-        "enabled": true
-      },
-      "disabled_user": {
-        "username": "disabled_user",
-        "password": "password123",
-        "enabled": false
-      }
-    }
-    ```
-    **Важно:** Убедитесь, что JSON-формат корректен.
-2.  После сохранения изменений, перезапустите сервис, чтобы он загрузил обновленный список пользователей:
-    ```bash
-    sudo systemctl restart astra-socks-eliza
-    ```
-
-### Просмотр статистики
-
-Для просмотра текущей статистики трафика и активных соединений используйте утилиту `get_eliza_stats`:
-
+Для добавления или изменения пользователей отредактируйте этот файл и перезапустите сервис прокси:
 ```bash
-get_eliza_stats
+sudo nano /etc/astra_socks_eliza/users.json
+sudo systemctl restart astra-socks-eliza
 ```
 
-Статистика обновляется каждые 5 секунд и сохраняется в `/var/lib/astra_socks_eliza/stats.json`.
+### Панель мониторинга
 
-### Просмотр логов
+Откройте в браузере `http://ВАШ_IP_СЕРВЕРА:8080` (или другой порт, который вы указали). Панель обновляется автоматически каждые 5 секунд.
 
-Основные события и ошибки можно просмотреть с помощью `journalctl`:
+#### Параметры запуска панели мониторинга
 
+- `-port`: Порт для веб-сервера (по умолчанию: `8080`).
+- `-stats-file`: Путь к файлу статистики (по умолчанию: `/var/lib/astra_socks_eliza/stats.json`).
+
+Пример запуска вручную на порту 9000:
 ```bash
-sudo journalctl -u astra-socks-eliza -f
+./eliza_dashboard -port 9000
 ```
-
-Логи хранятся не более 10 минут.
-
-## Разработка
-
-Для разработчиков, желающих внести изменения:
-
-1.  Отредактируйте `main.go`.
-2.  Пересоберите: `go build -o astra_socks_eliza main.go`.
-3.  Перезапустите сервис: `sudo systemctl restart astra-socks-eliza`.
-
------
-
-```
-
----
-
