@@ -65,6 +65,21 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             userStatsTableBody.appendChild(row);
         }
+
+    // Обновляем список пользователей с NAT
+    const natUserList = document.getElementById('nat-user-list');
+    natUserList.innerHTML = ''; // Очищаем список
+    if (stats.natEnabledUsers && stats.natEnabledUsers.length > 0) {
+        stats.natEnabledUsers.forEach(username => {
+            const listItem = document.createElement('li');
+            listItem.textContent = username;
+            natUserList.appendChild(listItem);
+        });
+    } else {
+        const listItem = document.createElement('li');
+        listItem.textContent = 'Нет пользователей с NAT';
+        natUserList.appendChild(listItem);
+    }
     }
 
     // Функция для создания/обновления графика

@@ -28,15 +28,22 @@ const (
 	statsFilePath    = "/var/lib/astra_socks_eliza/stats.json" // Путь к файлу статистики
 	usersFilePath    = "/etc/astra_socks_eliza/users.json"     // Путь к файлу пользователей
 	geoIPDBPath      = "/usr/share/GeoIP/GeoLite2-Country.mmdb" // Путь к GeoIP базе данных
+	natConfigPath    = "/etc/astra_socks_eliza/nat.json"       // Путь к файлу конфигурации NAT
 )
 
 // --- Структуры данных для пользователей и статистики (в памяти) ---
+
+// NATConfig определяет структуру файла nat.json
+type NATConfig struct {
+	IPs []string `json:"ips"`
+}
 
 // User представляет пользователя SOCKS5
 type User struct {
 	Username string `json:"username"`
 	Password string `json:"password"` // В реальной жизни хешировать!
 	Enabled  bool   `json:"enabled"`
+	NAT      bool   `json:"nat"`      // Включить NAT для этого пользователя
 }
 
 // UserTraffic представляет статистику трафика для пользователя
@@ -60,6 +67,7 @@ type GlobalStats struct {
 	UserStats          map[string]UserTraffic   `json:"userStats"`          // Статистика по каждому пользователю
 	CountryStats       map[string]*CountryStats `json:"countryStats"`       // Статистика по странам (ключ - код страны)
 	LastUpdateTime     time.Time                `json:"lastUpdateTime"`
+	NATEnabledUsers    []string                 `json:"natEnabledUsers"`    // Список пользователей с включенным NAT
 }
 
 // Глобальные хранилища в памяти
@@ -75,6 +83,8 @@ var (
 	activeConnectionsMutex   sync.Mutex
 
 	geoDB *geoip2.Reader // Указатель на ридер GeoIP базы
+
+	natIPs []net.IP // Слайс для хранения IP-адресов для NAT
 )
 
 // init вызывается один раз при запуске программы
@@ -83,7 +93,7 @@ func init() {
 	if err := loadUsersFromFile(); err != nil {
 		log.Printf("Внимание: Не удалось загрузить пользователей из файла %s: %v. Добавляем тестового пользователя.", usersFilePath, err)
 		// Добавляем тестового пользователя по умолчанию, если файл не найден или пуст
-		users["astranet"] = User{Username: "astranet", Password: "astranet", Enabled: true}
+		users["astranet"] = User{Username: "astranet", Password: "astranet", Enabled: true, NAT: false}
 	} else {
 		log.Printf("Пользователи загружены из %s.", usersFilePath)
 	}
@@ -95,6 +105,11 @@ func init() {
 		log.Printf("Внимание: Не удалось загрузить GeoIP базу данных из %s: %v. Сбор геолокационной статистики будет отключен.", geoIPDBPath, err)
 	} else {
 		log.Printf("GeoIP база данных успешно загружена из %s.", geoIPDBPath)
+	}
+
+	// Загрузка конфигурации NAT
+	if err := loadNATConfig(); err != nil {
+		log.Printf("Внимание: Не удалось загрузить конфигурацию NAT: %v. NAT будет отключен.", err)
 	}
 
 	log.Println("Порт SOCKS5: 7777")
@@ -169,34 +184,34 @@ func handleConnection(conn net.Conn) {
 		trafficMutex.Unlock()
 	}
 
-	username, err := socks5Handshake(conn)
+	user, err := socks5Handshake(conn)
 	if err != nil {
 		log.Printf("Ошибка SOCKS5 рукопожатия для %s: %v", conn.RemoteAddr(), err)
 		return
 	}
 
-	if err := handleSocks5Request(conn, username, clientIP); err != nil {
-		log.Printf("Ошибка SOCKS5 запроса для %s (пользователь %s): %v", conn.RemoteAddr(), username, err)
+	if err := handleSocks5Request(conn, user, clientIP); err != nil {
+		log.Printf("Ошибка SOCKS5 запроса для %s (пользователь %s): %v", conn.RemoteAddr(), user.Username, err)
 		return
 	}
 }
 
-func socks5Handshake(conn net.Conn) (string, error) {
+func socks5Handshake(conn net.Conn) (User, error) {
 	buf := make([]byte, 2)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения приветствия SOCKS5: %w", err)
+		return User{}, fmt.Errorf("ошибка чтения приветствия SOCKS5: %w", err)
 	}
 
 	if buf[0] != socks5Version {
-		return "", fmt.Errorf("неподдерживаемая версия SOCKS: %d", buf[0])
+		return User{}, fmt.Errorf("неподдерживаемая версия SOCKS: %d", buf[0])
 	}
 
 	numMethods := int(buf[1])
 	methods := make([]byte, numMethods)
 	_, err = io.ReadFull(conn, methods)
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения методов аутентификации: %w", err)
+		return User{}, fmt.Errorf("ошибка чтения методов аутентификации: %w", err)
 	}
 
 	foundUserPassAuth := false
@@ -209,49 +224,49 @@ func socks5Handshake(conn net.Conn) (string, error) {
 
 	if !foundUserPassAuth {
 		_, _ = conn.Write([]byte{socks5Version, 0xFF})
-		return "", fmt.Errorf("нет поддерживаемых методов аутентификации (требуется 0x02)")
+		return User{}, fmt.Errorf("нет поддерживаемых методов аутентификации (требуется 0x02)")
 	}
 
 	_, err = conn.Write([]byte{socks5Version, usernamePasswordAuth})
 	if err != nil {
-		return "", fmt.Errorf("ошибка отправки подтверждения метода аутентификации: %w", err)
+		return User{}, fmt.Errorf("ошибка отправки подтверждения метода аутентификации: %w", err)
 	}
 
-	username, err := authenticateUserPass(conn)
+	user, err := authenticateUserPass(conn)
 	if err != nil {
-		return "", err
+		return User{}, err
 	}
-	return username, nil
+	return user, nil
 }
 
-func authenticateUserPass(conn net.Conn) (string, error) {
+func authenticateUserPass(conn net.Conn) (User, error) {
 	buf := make([]byte, 2)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения заголовка аутентификации: %w", err)
+		return User{}, fmt.Errorf("ошибка чтения заголовка аутентификации: %w", err)
 	}
 
 	if buf[0] != 0x01 {
-		return "", fmt.Errorf("неподдерживаемая версия протокола аутентификации: %d", buf[0])
+		return User{}, fmt.Errorf("неподдерживаемая версия протокола аутентификации: %d", buf[0])
 	}
 
 	usernameLen := int(buf[1])
 	usernameBuf := make([]byte, usernameLen)
 	_, err = io.ReadFull(conn, usernameBuf)
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения имени пользователя: %w", err)
+		return User{}, fmt.Errorf("ошибка чтения имени пользователя: %w", err)
 	}
 	username := string(usernameBuf)
 
 	_, err = io.ReadFull(conn, buf[0:1])
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения длины пароля: %w", err)
+		return User{}, fmt.Errorf("ошибка чтения длины пароля: %w", err)
 	}
 	passwordLen := int(buf[0])
 	password := make([]byte, passwordLen)
 	_, err = io.ReadFull(conn, password)
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения пароля: %w", err)
+		return User{}, fmt.Errorf("ошибка чтения пароля: %w", err)
 	}
 
 	usersMutex.RLock()
@@ -261,18 +276,18 @@ func authenticateUserPass(conn net.Conn) (string, error) {
 	if !ok || !user.Enabled || user.Password != string(password) {
 		log.Printf("Аутентификация не удалась для пользователя: %s (с %s)", username, conn.RemoteAddr())
 		_, _ = conn.Write([]byte{0x01, 0x01})
-		return "", fmt.Errorf("неверные имя пользователя или пароль, или пользователь неактивен")
+		return User{}, fmt.Errorf("неверные имя пользователя или пароль, или пользователь неактивен")
 	}
 
 	log.Printf("Аутентификация успешна для пользователя: %s (с %s)", username, conn.RemoteAddr())
 	_, err = conn.Write([]byte{0x01, replySuccess})
 	if err != nil {
-		return "", fmt.Errorf("ошибка отправки ответа об успешной аутентификации: %w", err)
+		return User{}, fmt.Errorf("ошибка отправки ответа об успешной аутентификации: %w", err)
 	}
-	return username, nil
+	return user, nil
 }
 
-func handleSocks5Request(conn net.Conn, username string, clientIP string) error {
+func handleSocks5Request(conn net.Conn, user User, clientIP string) error {
 	buf := make([]byte, 4)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
@@ -332,12 +347,32 @@ func handleSocks5Request(conn net.Conn, username string, clientIP string) error 
 
 	target := net.JoinHostPort(destAddr, strconv.Itoa(destPort))
 
-	targetConn, err := net.Dial("tcp", target)
-	if err != nil {
-		log.Printf("Ошибка Dial к %s (запрошено %s от %s): %v", target, username, conn.RemoteAddr(), err)
-		_, _ = conn.Write([]byte{socks5Version, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
-		return fmt.Errorf("не удалось подключиться к целевому хосту: %w", err)
+	var targetConn net.Conn
+	// Логика NAT
+	if user.NAT && len(natIPs) > 0 {
+		// Round-robin IP selection
+		ipIndex := int(time.Now().Unix()) % len(natIPs)
+		localIP := natIPs[ipIndex]
+
+		dialer := &net.Dialer{
+			LocalAddr: &net.TCPAddr{IP: localIP},
+		}
+		targetConn, err = dialer.Dial("tcp", target)
+		if err != nil {
+			log.Printf("Ошибка Dial (NAT) к %s с IP %s: %v", target, localIP, err)
+			_, _ = conn.Write([]byte{socks5Version, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			return fmt.Errorf("не удалось подключиться к целевому хосту (NAT): %w", err)
+		}
+		log.Printf("Пользователь %s подключился к %s через NAT IP %s", user.Username, target, localIP)
+	} else {
+		targetConn, err = net.Dial("tcp", target)
+		if err != nil {
+			log.Printf("Ошибка Dial к %s (запрошено %s от %s): %v", target, user.Username, conn.RemoteAddr(), err)
+			_, _ = conn.Write([]byte{socks5Version, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			return fmt.Errorf("не удалось подключиться к целевому хосту: %w", err)
+		}
 	}
+
 	defer targetConn.Close()
 
 	_, err = conn.Write([]byte{socks5Version, replySuccess, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
@@ -346,7 +381,7 @@ func handleSocks5Request(conn net.Conn, username string, clientIP string) error 
 	}
 
 	countryCode := getCountryCode(clientIP)
-	return proxyData(conn, targetConn, username, countryCode)
+	return proxyData(conn, targetConn, user.Username, countryCode)
 }
 
 // customWriter обертывает net.Conn и считает переданные байты
@@ -431,6 +466,16 @@ func saveStatsPeriodically(interval time.Duration) {
 			currentUserStats[username] = stats
 		}
 
+		// Собираем список пользователей с включенным NAT
+		var natUsers []string
+		usersMutex.RLock()
+		for _, user := range users {
+			if user.NAT {
+				natUsers = append(natUsers, user.Username)
+			}
+		}
+		usersMutex.RUnlock()
+
 		// Копируем статистику по странам
 		currentCountryStats := make(map[string]*CountryStats)
 		for code, stats := range countryStats {
@@ -451,6 +496,7 @@ func saveStatsPeriodically(interval time.Duration) {
 			UserStats:          currentUserStats,
 			CountryStats:       currentCountryStats, // Добавляем статистику по странам
 			LastUpdateTime:     time.Now(),
+			NATEnabledUsers:    natUsers,
 		}
 
 		// Сохраняем статистику в файл
@@ -498,7 +544,7 @@ func loadUsersFromFile() error {
 			// Если файл не существует, создаем его с тестовыми данными
 			log.Printf("Инфо: Файл пользователей %s не найден. Создаю новый файл с пользователем 'astranet:astranet'.", usersFilePath)
 			defaultUsers := map[string]User{
-				"astranet": {Username: "astranet", Password: "astranet", Enabled: true},
+				"astranet": {Username: "astranet", Password: "astranet", Enabled: true, NAT: false},
 			}
 			data, err := json.MarshalIndent(defaultUsers, "", "  ")
 			if err != nil {
@@ -529,5 +575,48 @@ func loadUsersFromFile() error {
 	usersMutex.Lock()
 	users = tempUsers
 	usersMutex.Unlock()
+	return nil
+}
+
+// loadNATConfig загружает IP-адреса для NAT из файла конфигурации
+func loadNATConfig() error {
+	file, err := os.Open(natConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Инфо: Файл конфигурации NAT '%s' не найден. NAT будет отключен.", natConfigPath)
+			return nil // Не считать ошибкой, если файла просто нет
+		}
+		return fmt.Errorf("ошибка открытия файла NAT %s: %w", natConfigPath, err)
+	}
+	defer file.Close()
+
+	var config NATConfig
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&config); err != nil {
+		return fmt.Errorf("ошибка декодирования JSON из файла NAT %s: %w", natConfigPath, err)
+	}
+
+	if len(config.IPs) == 0 {
+		log.Println("Внимание: Файл конфигурации NAT не содержит IP-адресов. NAT будет отключен.")
+		return nil
+	}
+
+	// Очищаем старый слайс и заполняем новыми IP
+	natIPs = make([]net.IP, 0, len(config.IPs))
+	for _, ipStr := range config.IPs {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			log.Printf("Внимание: Неверный IP-адрес в конфигурации NAT: '%s'. Пропускаем.", ipStr)
+			continue
+		}
+		natIPs = append(natIPs, ip)
+	}
+
+	if len(natIPs) > 0 {
+		log.Printf("Загружено %d IP-адресов для NAT.", len(natIPs))
+	} else {
+		log.Println("Внимание: Ни одного валидного IP-адреса не найдено в конфигурации NAT. NAT будет отключен.")
+	}
+
 	return nil
 }
